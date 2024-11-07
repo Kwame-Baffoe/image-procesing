@@ -25,11 +25,16 @@ interface FileWithPreview extends File {
 }
 
 interface ImageMetadata {
-  width: number;
-  height: number;
-  format: string;
-  size: number;
-}
+    width: number;
+    height: number;
+    format: string;
+    size: number;
+    channels?: number;
+    space?: string;
+    density?: number;
+    hasAlpha?: boolean;
+    orientation?: number;
+  }
 
 interface ProcessedImage {
   original: string;
@@ -373,4 +378,4 @@ export default function ImageProcessing() {
       </Card>
     </div>
   );
-}
+} 
