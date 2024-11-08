@@ -724,87 +724,93 @@ export default function ImageProcessor() {
         </CardContent>
       </Card>
 
-      {/* Process Confirmation Dialog */}
-      <AlertDialog open={showProcessDialog} onOpenChange={setShowProcessDialog}>
-        <AlertDialogContent className="max-w-2xl">
-          <AlertDialogHeader>
-            <AlertDialogTitle>Confirm Processing Settings</AlertDialogTitle>
-            <AlertDialogDescription className="space-y-4">
-              <div className="bg-gray-50 rounded-lg p-4 space-y-3">
-                <h4 className="font-medium">Selected Files</h4>
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  {files.filter(f => f.status === 'success').map(file => (
-                    <div key={file.id} className="flex items-center space-x-2">
-                      <CheckCircle2 className="h-4 w-4 text-green-500" />
-                      <span className="truncate">{file.file.name}</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
+     {/* Process Confirmation Dialog */}
+<AlertDialog open={showProcessDialog} onOpenChange={setShowProcessDialog}>
+  <AlertDialogContent className="max-w-2xl">
+    <AlertDialogHeader>
+      <AlertDialogTitle>Confirm Processing Settings</AlertDialogTitle>
+    </AlertDialogHeader>
+    
+    {/* Content */}
+    <div className="space-y-4 py-4">
+      {/* Selected Files Section */}
+      <div className="bg-gray-50 rounded-lg p-4 space-y-3">
+        <div className="font-medium">Selected Files</div>
+        <div className="grid grid-cols-2 gap-2 text-sm">
+          {files.filter(f => f.status === 'success').map(file => (
+            <div key={file.id} className="flex items-center space-x-2">
+              <CheckCircle2 className="h-4 w-4 text-green-500" />
+              <span className="truncate">{file.file.name}</span>
+            </div>
+          ))}
+        </div>
+      </div>
 
-              <div className="bg-gray-50 rounded-lg p-4 space-y-3">
-                <h4 className="font-medium">Processing Options</h4>
-                <div className="grid gap-2 text-sm">
-                  <div className="flex justify-between">
-                    <span>Output Format:</span>
-                    <span className="font-medium">{processingOptions.format.toUpperCase()}</span>
+      {/* Processing Options Section */}
+      <div className="bg-gray-50 rounded-lg p-4 space-y-3">
+        <div className="font-medium">Processing Options</div>
+        <div className="grid gap-2 text-sm">
+          <div className="flex justify-between">
+            <span>Output Format:</span>
+            <span className="font-medium">{processingOptions.format.toUpperCase()}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Quality:</span>
+            <span className="font-medium">{processingOptions.quality}%</span>
+          </div>
+          {processingOptions.resize.enabled && (
+            <div className="flex justify-between">
+              <span>Resize:</span>
+              <span className="font-medium">
+                {processingOptions.resize.width} × {processingOptions.resize.height}px
+              </span>
+            </div>
+          )}
+          {Object.entries(processingOptions.enhancement).some(([_, value]) => value !== 0) && (
+            <>
+              <div>Enhancements:</div>
+              {Object.entries(processingOptions.enhancement).map(([key, value]) => (
+                value !== 0 && (
+                  <div key={key} className="flex justify-between pl-4">
+                    <span className="capitalize">{key}:</span>
+                    <span className="font-medium">{value > 0 ? '+' : ''}{value}</span>
                   </div>
-                  <div className="flex justify-between">
-                    <span>Quality:</span>
-                    <span className="font-medium">{processingOptions.quality}%</span>
-                  </div>
-                  {processingOptions.resize.enabled && (
-                    <div className="flex justify-between">
-                      <span>Resize:</span>
-                      <span className="font-medium">
-                        {processingOptions.resize.width} × {processingOptions.resize.height}px
-                      </span>
-                    </div>
-                  )}
-                  {Object.entries(processingOptions.enhancement).some(([_, value]) => value !== 0) && (
-                    <div className="grid gap-1">
-                      <span>Enhancements:</span>
-                      {Object.entries(processingOptions.enhancement).map(([key, value]) => (
-                        value !== 0 && (
-                          <div key={key} className="flex justify-between pl-4">
-                            <span className="capitalize">{key}:</span>
-                            <span className="font-medium">{value > 0 ? '+' : ''}{value}</span>
-                          </div>
-                        )
-                      ))}
-                    </div>
-                  )}
-                  {processingOptions.compression.enabled && (
-                    <div className="flex justify-between">
-                      <span>Compression Level:</span>
-                      <span className="font-medium">{processingOptions.compression.level}%</span>
-                    </div>
-                  )}
-                </div>
-              </div>
+                )
+              ))}
+            </>
+          )}
+          {processingOptions.compression.enabled && (
+            <div className="flex justify-between">
+              <span>Compression Level:</span>
+              <span className="font-medium">{processingOptions.compression.level}%</span>
+            </div>
+          )}
+        </div>
+      </div>
 
-              <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-sm">
-                <p className="flex items-center text-yellow-800">
-                  <AlertCircle className="h-4 w-4 mr-2" />
-                  Processing will modify your original images according to these settings.
-                </p>
-              </div>
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction 
-              onClick={() => {
-                setShowProcessDialog(false);
-                processImages();
-              }}
-              className="bg-blue-600 hover:bg-blue-700"
-            >
-              Confirm & Process
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+      {/* Warning Section */}
+      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+        <div className="flex items-center text-sm text-yellow-800">
+          <AlertCircle className="h-4 w-4 mr-2 shrink-0" />
+          <span>Processing will modify your original images according to these settings.</span>
+        </div>
+      </div>
+    </div>
+
+    <AlertDialogFooter>
+      <AlertDialogCancel>Cancel</AlertDialogCancel>
+      <AlertDialogAction 
+        onClick={() => {
+          setShowProcessDialog(false);
+          processImages();
+        }}
+        className="bg-blue-600 hover:bg-blue-700"
+      >
+        Confirm & Process
+      </AlertDialogAction>
+    </AlertDialogFooter>
+  </AlertDialogContent>
+</AlertDialog>
     </div>
   );
 }
