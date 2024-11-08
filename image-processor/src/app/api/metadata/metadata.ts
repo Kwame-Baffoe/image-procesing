@@ -5,7 +5,7 @@ import sharp from 'sharp';
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData();
-    const file = formData.get('image') as File;
+    const file = formData.get('file') as File;
     
     if (!file) {
       return NextResponse.json(

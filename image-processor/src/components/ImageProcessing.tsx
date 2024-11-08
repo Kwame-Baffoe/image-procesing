@@ -1,12 +1,9 @@
-
-// src/components/ImageProcessing.tsx
+// src/components/ImageProcess.tsx
 'use client';
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { useDropzone } from 'react-dropzone';
 import Image from 'next/image';
-import JSZip from 'jszip';
-import { motion, AnimatePresence } from 'framer-motion';
 import { 
   Upload, 
   X, 
@@ -19,8 +16,10 @@ import {
   Settings,
   Image as ImageIcon,
   Save,
+  RotateCw,
   Trash2
 } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Label } from '@/components/ui/label';
@@ -28,8 +27,6 @@ import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Switch } from '@/components/ui/switch';
-import { Progress } from '@/components/ui/progress';
-import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import {
   Select,
   SelectContent,
@@ -37,6 +34,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select';
+import { Progress } from '@/components/ui/progress';
+import {
+  Alert,
+  AlertDescription,
+  AlertTitle,
+} from '@/components/ui/alert';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -47,6 +50,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog';
+import { Slider } from '@/components/ui/slider';
 import {
   Tooltip,
   TooltipContent,
@@ -54,35 +58,31 @@ import {
   TooltipTrigger,
 } from '@/components/ui/tooltip';
 
-// Types
 interface FileWithPreview extends File {
   preview: string;
   uploadProgress?: number;
   status?: 'uploading' | 'complete' | 'error';
-  error?: string;
   id: string;
+  error?: string;
+  processingStatus?: 'waiting' | 'processing' | 'complete' | 'error';
 }
 
-interface ImageMetadata {
-  width: number;
-  height: number;
-  format: string;
-  size: number;
-  channels?: number;
-  space?: string;
-  density?: number;
-  hasAlpha?: boolean;
-  orientation?: number;
-}
-
-interface ProcessedImage {
+interface ProcessedFile {
+  id: string;
   original: string;
   processed: string;
   url: string;
-  metadata: ImageMetadata;
+  metadata: {
+    size: number;
+    width: number;
+    height: number;
+    format: string;
+  };
+  notes?: string;
+  processedAt: Date;
 }
 
-interface ProcessingConfig {
+interface ProcessingOptions {
   inputFormat: string;
   outputFormat: string;
   quality: number;
@@ -94,10 +94,12 @@ interface ProcessingConfig {
   sharpen: boolean;
   watermark: boolean;
   watermarkText: string;
-  brightness: number;
-  contrast: number;
-  saturation: number;
-  batchProcessing: boolean;
+  advancedFilters: {
+    brightness: number;
+    contrast: number;
+    saturation: number;
+  };
+  processingNotes: string;
 }
 
 const ACCEPTED_TYPES = {
@@ -106,7 +108,7 @@ const ACCEPTED_TYPES = {
   'image/webp': ['.webp'],
 };
 
-const DEFAULT_CONFIG: ProcessingConfig = {
+const defaultProcessingOptions: ProcessingOptions = {
   inputFormat: 'JPG',
   outputFormat: 'PNG',
   quality: 80,
@@ -118,274 +120,235 @@ const DEFAULT_CONFIG: ProcessingConfig = {
   sharpen: false,
   watermark: false,
   watermarkText: '',
-  brightness: 0,
-  contrast: 0,
-  saturation: 0,
-  batchProcessing: false,
+  advancedFilters: {
+    brightness: 0,
+    contrast: 0,
+    saturation: 0,
+  },
+  processingNotes: '',
 };
 
-// Helper functions
 const generateUniqueId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 
-const formatFileSize = (bytes: number) => {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(2)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
-};
+// ... (previous code remains the same)
 
-// Main Component
-export default function ImageProcessing() {
-  // State
-  const [files, setFiles] = useState<FileWithPreview[]>([]);
-  const [metadata, setMetadata] = useState<ImageMetadata | null>(null);
-  const [config, setConfig] = useState<ProcessingConfig>(DEFAULT_CONFIG);
-  const [processing, setProcessing] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const [processedFiles, setProcessedFiles] = useState<ProcessedImage[]>([]);
-  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
-  const [currentStage, setCurrentStage] = useState<string>('');
-  const [activeTab, setActiveTab] = useState('upload');
-
-  // Cleanup effect
-  useEffect(() => {
-    return () => {
-      files.forEach(file => {
-        if (file.preview) {
-          URL.revokeObjectURL(file.preview);
-        }
-      });
-    };
-  }, [files]);
-
-  // File upload handler
-  const handleFileUpload = async (file: FileWithPreview) => {
-    try {
+export default function ImageProcess() {
+    const [activeTab, setActiveTab] = useState('upload');
+    const [files, setFiles] = useState<FileWithPreview[]>([]);
+    const [options, setOptions] = useState<ProcessingOptions>(defaultProcessingOptions);
+    const [processing, setProcessing] = useState(false);
+    const [progress, setProgress] = useState(0);
+    const [error, setError] = useState<string | null>(null);
+    const [processedFiles, setProcessedFiles] = useState<ProcessedFile[]>([]);
+    const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+    const [currentStage, setCurrentStage] = useState<string>('');
+    const uploadQueueRef = useRef<string[]>([]);
+  
+    const handleFileUpload = async (file: FileWithPreview) => {
       const formData = new FormData();
       formData.append('file', file);
-
-      setFiles(current =>
-        current.map(f =>
-          f.id === file.id
-            ? { ...f, status: 'uploading', uploadProgress: 0 }
-            : f
-        )
-      );
-
-      // Progress simulation
-      const progressInterval = setInterval(() => {
+  
+      try {
+        uploadQueueRef.current = [...uploadQueueRef.current, file.id];
+        
+        // Update file status to uploading
         setFiles(current =>
           current.map(f =>
-            f.id === file.id && f.status === 'uploading'
-              ? { ...f, uploadProgress: Math.min((f.uploadProgress || 0) + 10, 90) }
+            f.id === file.id
+              ? { ...f, status: 'uploading', uploadProgress: 0 }
               : f
           )
         );
-      }, 200);
-
-      const response = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
-      });
-
-      clearInterval(progressInterval);
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Upload failed');
-      }
-
-      const data = await response.json();
-
-      // Update file status
-      setFiles(current =>
-        current.map(f =>
-          f.id === file.id
-            ? {
-                ...f,
-                uploadProgress: 100,
-                status: 'complete',
-                preview: data.url
-              }
-            : f
-        )
-      );
-
-      // Get metadata for single files
-      if (!config.batchProcessing) {
-        const metadataResponse = await fetch('/api/metadata', {
+  
+        const response = await fetch('/api/upload', {
           method: 'POST',
           body: formData,
         });
-
-        if (metadataResponse.ok) {
-          const metadata = await metadataResponse.json();
-          setMetadata(metadata);
+  
+        if (!response.ok) throw new Error('Upload failed');
+  
+        const data = await response.json();
+  
+        // Update file status to complete
+        setFiles(current =>
+          current.map(f =>
+            f.id === file.id
+              ? { 
+                  ...f, 
+                  uploadProgress: 100, 
+                  status: 'complete',
+                  processingStatus: 'waiting'
+                }
+              : f
+          )
+        );
+  
+        uploadQueueRef.current = uploadQueueRef.current.filter(id => id !== file.id);
+  
+      } catch (error) {
+        setFiles(current =>
+          current.map(f =>
+            f.id === file.id
+              ? { 
+                  ...f, 
+                  status: 'error',
+                  error: error instanceof Error ? error.message : 'Upload failed'
+                }
+              : f
+          )
+        );
+        uploadQueueRef.current = uploadQueueRef.current.filter(id => id !== file.id);
+        throw error;
+      }
+    };
+  
+    const onDrop = useCallback(async (acceptedFiles: File[]) => {
+      const newFiles = acceptedFiles.map(file => ({
+        ...file,
+        preview: URL.createObjectURL(file),
+        id: generateUniqueId(),
+        status: 'uploading' as const,
+        uploadProgress: 0
+      }));
+  
+      setFiles(prev => [...prev, ...newFiles]);
+  
+      // Process each file
+      for (const file of newFiles) {
+        try {
+          await handleFileUpload(file);
+        } catch (error) {
+          console.error('Upload error:', error);
+          // Error is handled in handleFileUpload
         }
       }
-
-    } catch (error) {
-      console.error('Upload error:', error);
-      setFiles(current =>
-        current.map(f =>
-          f.id === file.id
-            ? {
-                ...f,
-                status: 'error',
-                error: error instanceof Error ? error.message : 'Upload failed'
-              }
-            : f
-        )
-      );
-    }
-  };
-
-  // Dropzone configuration
-  const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    setError(null);
-    
-    const newFiles = acceptedFiles.map(file => ({
-      ...file,
-      preview: URL.createObjectURL(file),
-      id: generateUniqueId(),
-      status: 'uploading' as const,
-      uploadProgress: 0
-    }));
-
-    setFiles(prev => [...prev, ...newFiles]);
-
-    for (const file of newFiles) {
-      await handleFileUpload(file);
-    }
-  }, [config.batchProcessing]);
-
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: ACCEPTED_TYPES,
-    maxSize: 10485760, // 10MB
-    multiple: config.batchProcessing,
-  });
-
-  // File removal
-  const removeFile = useCallback((fileToRemove: FileWithPreview) => {
-    setFiles(files => files.filter(file => file !== fileToRemove));
-    if (fileToRemove.preview) {
-      URL.revokeObjectURL(fileToRemove.preview);
-    }
-    if (files.length === 1) {
-      setMetadata(null);
-    }
-  }, [files]);
-
-  // Processing handler
-  const handleProcess = async () => {
-    setProcessing(true);
-    setProgress(0);
-    setError(null);
-
-    try {
-      const formData = new FormData();
-      files.forEach(file => formData.append('images', file));
-      formData.append('config', JSON.stringify(config));
-
-      const stages = ['Analyzing', 'Processing', 'Optimizing', 'Finalizing'];
-      
-      for (const [index, stage] of stages.entries()) {
-        setCurrentStage(stage);
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        setProgress((index + 1) * 25);
-      }
-
-      const response = await fetch('/api/process', {
-        method: 'POST',
-        body: formData,
-      });
-
-      if (!response.ok) {
-        const errorData = await response.json();
-        throw new Error(errorData.error || 'Processing failed');
-      }
-
-      const result = await response.json();
-      setProcessedFiles(result.files);
-      setActiveTab('results');
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Processing failed');
-    } finally {
-      setProcessing(false);
-      setProgress(0);
-      setCurrentStage('');
-    }
-  };
-
-  // Download handler
-  const handleDownload = async (file: ProcessedImage) => {
-    try {
-      const response = await fetch(file.url);
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = file.processed;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Download failed:', error);
-      setError('Failed to download file');
-    }
-  };
-
-  // Download all handler
-  const handleDownloadAll = async () => {
-    try {
-      const zip = new JSZip();
-      
-      await Promise.all(
-        processedFiles.map(async (file) => {
-          const response = await fetch(file.url);
-          const blob = await response.blob();
-          zip.file(file.processed, blob);
-        })
-      );
-
-      const content = await zip.generateAsync({ type: 'blob' });
-      const url = URL.createObjectURL(content);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'processed-images.zip';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Batch download failed:', error);
-      setError('Failed to download files');
-    }
-  };
-
-  // Reset handler
-  const handleReset = () => {
-    files.forEach(file => {
-      if (file.preview) {
-        URL.revokeObjectURL(file.preview);
-      }
+    }, []);
+  
+    const { getRootProps, getInputProps, isDragActive } = useDropzone({
+      onDrop,
+      accept: ACCEPTED_TYPES,
+      maxSize: 10485760, // 10MB
+      multiple: true
     });
-    setFiles([]);
-    setMetadata(null);
-    setConfig(DEFAULT_CONFIG);
-    setProcessedFiles([]);
-    setActiveTab('upload');
-  };
+  
+    const removeFile = useCallback((fileToRemove: FileWithPreview) => {
+      setFiles(files => files.filter(file => file !== fileToRemove));
+      URL.revokeObjectURL(fileToRemove.preview);
+    }, []);
+  
+    const resetAdvancedFilters = useCallback(() => {
+      setOptions(prev => ({
+        ...prev,
+        advancedFilters: defaultProcessingOptions.advancedFilters
+      }));
+    }, []);
+  
+    const simulateProcessingStages = async () => {
+      const stages = [
+        { name: 'Analyzing images', duration: 1000 },
+        { name: 'Applying transformations', duration: 1500 },
+        { name: 'Optimizing output', duration: 1000 },
+        { name: 'Finalizing', duration: 500 }
+      ];
+  
+      let completedProgress = 0;
+      for (const stage of stages) {
+        setCurrentStage(stage.name);
+        const startProgress = completedProgress;
+        const increment = 25;
+        
+        await new Promise<void>(resolve => {
+          const startTime = Date.now();
+          const animate = () => {
+            const elapsed = Date.now() - startTime;
+            const progress = Math.min(elapsed / stage.duration, 1);
+            const currentProgress = startProgress + (progress * increment);
+            setProgress(Math.floor(currentProgress));
+            
+            if (progress < 1) {
+              requestAnimationFrame(animate);
+            } else {
+              completedProgress += increment;
+              resolve();
+            }
+          };
+          requestAnimationFrame(animate);
+        });
+      }
+    };
+  
+    const handleProcess = async () => {
+      setProcessing(true);
+      setProgress(0);
+      setError(null);
+      
+      try {
+        // Only process files that are complete
+        const readyFiles = files.filter(f => f.status === 'complete');
+        const formData = new FormData();
+        
+        readyFiles.forEach(file => formData.append('images', file));
+        formData.append('config', JSON.stringify(options));
+  
+        // Start processing animation
+        simulateProcessingStages();
+  
+        const response = await fetch('/api/process', {
+          method: 'POST',
+          body: formData
+        });
+  
+        if (!response.ok) {
+          throw new Error('Processing failed');
+        }
+  
+        const result = await response.json();
+        
+        // Add timestamp and normalize data
+        const processedResults = result.files.map((file: ProcessedFile) => ({
+          ...file,
+          processedAt: new Date(),
+          notes: options.processingNotes
+        }));
+  
+        setProcessedFiles(processedResults);
+        setActiveTab('results');
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'An error occurred');
+      } finally {
+        setProcessing(false);
+        setProgress(0);
+        setCurrentStage('');
+      }
+    };
+  
+    // Clean up on unmount
+    React.useEffect(() => {
+      return () => {
+        files.forEach(file => {
+          if (file.preview) {
+            URL.revokeObjectURL(file.preview);
+          }
+        });
+      };
+    }, [files]);
+  
 
-// Component JSX
-return (
-    <div className="max-w-6xl mx-auto p-4">
+    // ... (previous code remains the same)
+
+  return (
+    <div className="container mx-auto p-4 max-w-6xl">
       <Card className="bg-white shadow-xl">
         <CardHeader>
           <CardTitle className="flex items-center justify-between">
-            <span>Image Processing Station</span>
+            <div className="flex items-center space-x-2">
+              <span>Image Processing Station</span>
+              {uploadQueueRef.current.length > 0 && (
+                <span className="text-sm text-blue-500">
+                  ({uploadQueueRef.current.length} uploads in progress)
+                </span>
+              )}
+            </div>
             {processing && (
               <motion.div
                 initial={{ opacity: 0 }}
@@ -393,19 +356,27 @@ return (
                 className="flex items-center text-sm text-blue-600"
               >
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                {currentStage}
+                {currentStage || 'Processing...'}
               </motion.div>
             )}
           </CardTitle>
         </CardHeader>
         <CardContent>
           <Tabs value={activeTab} onValueChange={setActiveTab}>
-            <TabsList className="grid grid-cols-3 w-full">
-              <TabsTrigger value="upload">Upload</TabsTrigger>
-              <TabsTrigger value="options" disabled={files.length === 0}>
+            <TabsList className="grid w-full grid-cols-3">
+              <TabsTrigger value="upload" disabled={processing}>
+                <Upload className="h-4 w-4 mr-2" />
+                Upload {files.length > 0 && `(${files.length})`}
+              </TabsTrigger>
+              <TabsTrigger 
+                value="options" 
+                disabled={files.length === 0 || processing || files.every(f => f.status === 'error')}
+              >
+                <Settings className="h-4 w-4 mr-2" />
                 Options
               </TabsTrigger>
               <TabsTrigger value="results" disabled={processedFiles.length === 0}>
+                <Filter className="h-4 w-4 mr-2" />
                 Results
               </TabsTrigger>
             </TabsList>
@@ -431,33 +402,30 @@ return (
                     </motion.div>
                     <div className="text-center">
                       <p className="text-base text-gray-600">
-                        {isDragActive 
-                          ? 'Drop your images here...' 
-                          : 'Drag & drop images here, or click to select'
-                        }
+                        {isDragActive ? 'Drop your images here' : 'Drag & drop your images here'}
                       </p>
                       <p className="text-sm text-gray-500 mt-1">
                         Supports: PNG, JPG, WebP up to 10MB
-                        {config.batchProcessing && ' (multiple files allowed)'}
                       </p>
                     </div>
                   </div>
                 </div>
 
-                <AnimatePresence>
+                <AnimatePresence mode="popLayout">
                   {files.map((file) => (
                     <motion.div
                       key={file.id}
                       initial={{ opacity: 0, y: 20 }}
                       animate={{ opacity: 1, y: 0 }}
                       exit={{ opacity: 0, x: -100 }}
+                      transition={{ duration: 0.2 }}
                       className="relative border rounded-lg p-4 bg-gray-50"
                     >
                       <div className="flex items-center space-x-4">
                         <div className="relative h-20 w-20 rounded-md overflow-hidden">
                           <Image
                             src={file.preview}
-                            alt={file.name}
+                            alt={`Preview of ${file.name}`}
                             fill
                             className="object-cover"
                             sizes="80px"
@@ -468,7 +436,7 @@ return (
                             <div>
                               <p className="font-medium truncate">{file.name}</p>
                               <p className="text-sm text-gray-500">
-                                {formatFileSize(file.size)}
+                                {(file.size / (1024 * 1024)).toFixed(2)} MB
                               </p>
                             </div>
                             <TooltipProvider>
@@ -480,21 +448,21 @@ return (
                                     onClick={() => removeFile(file)}
                                     className="text-gray-500 hover:text-red-500"
                                   >
-                                    <X className="h-4 w-4" />
+                                    <Trash2 className="h-4 w-4" />
                                   </Button>
                                 </TooltipTrigger>
-                                <TooltipContent>Remove file</TooltipContent>
+                                <TooltipContent>
+                                  Remove file
+                                </TooltipContent>
                               </Tooltip>
                             </TooltipProvider>
                           </div>
-
+                          
                           {file.status === 'uploading' && (
                             <div className="mt-2 space-y-1">
-                              <Progress 
-                                value={file.uploadProgress} 
-                                className="h-1"
-                              />
-                              <p className="text-xs text-gray-500">
+                              <Progress value={file.uploadProgress} className="h-1" />
+                              <p className="text-xs text-gray-500 flex items-center">
+                                <Loader2 className="h-3 w-3 mr-1 animate-spin" />
                                 Uploading... {file.uploadProgress}%
                               </p>
                             </div>
@@ -511,16 +479,16 @@ return (
                             <div className="mt-2">
                               <p className="text-xs text-red-500 flex items-center">
                                 <AlertCircle className="h-3 w-3 mr-1" />
-                                {file.error}
+                                Upload failed
                               </p>
-                              <div className="flex space-x-2 mt-1">
-                                <Button
-                                  variant="outline"
+                              <div className="flex items-center space-x-2 mt-1">
+                                <Button 
+                                  variant="outline" 
                                   size="sm"
                                   onClick={() => handleFileUpload(file)}
                                   className="text-xs"
                                 >
-                                  <RefreshCw className="h-3 w-3 mr-1" />
+                                  <RotateCw className="h-3 w-3 mr-1" />
                                   Retry
                                 </Button>
                                 <Button
@@ -529,7 +497,7 @@ return (
                                   onClick={() => removeFile(file)}
                                   className="text-xs text-red-500"
                                 >
-                                  <Trash2 className="h-3 w-3 mr-1" />
+                                  <X className="h-3 w-3 mr-1" />
                                   Remove
                                 </Button>
                               </div>
@@ -542,19 +510,23 @@ return (
                 </AnimatePresence>
 
                 {files.length > 0 && (
-                  <div className="flex space-x-4">
+                  <div className="flex items-center justify-between">
                     <Button
                       variant="outline"
-                      onClick={handleReset}
-                      className="flex-1"
+                      onClick={() => {
+                        files.forEach(file => URL.revokeObjectURL(file.preview));
+                        setFiles([]);
+                      }}
+                      className="flex items-center"
+                      disabled={processing}
                     >
-                      <RefreshCw className="h-4 w-4 mr-2" />
+                      <Trash2 className="h-4 w-4 mr-2" />
                       Clear All
                     </Button>
                     <Button
-                      className="flex-1"
                       onClick={() => setActiveTab('options')}
-                      disabled={files.some(f => f.status === 'uploading')}
+                      disabled={files.some(f => f.status === 'uploading') || processing}
+                      className="flex items-center"
                     >
                       <Settings className="h-4 w-4 mr-2" />
                       Continue to Options
@@ -563,6 +535,8 @@ return (
                 )}
               </div>
             </TabsContent>
+
+            {/* Options Tab Content */}
             <TabsContent value="options">
               <div className="space-y-6">
                 {/* Basic Options */}
@@ -570,8 +544,8 @@ return (
                   <div className="space-y-2">
                     <Label>Output Format</Label>
                     <Select
-                      value={config.outputFormat}
-                      onValueChange={(value) => setConfig({ ...config, outputFormat: value })}
+                      value={options.outputFormat}
+                      onValueChange={(value) => setOptions({ ...options, outputFormat: value })}
                     >
                       <SelectTrigger>
                         <SelectValue />
@@ -585,16 +559,15 @@ return (
                   </div>
 
                   <div className="space-y-2">
-                    <Label>Quality ({config.quality}%)</Label>
-                    <div className="pt-2">
-                      <Slider
-                        value={[config.quality]}
-                        min={0}
-                        max={100}
-                        step={1}
-                        onValueChange={([value]) => setConfig({ ...config, quality: value })}
-                      />
-                    </div>
+                    <Label>Quality ({options.quality}%)</Label>
+                    <Slider
+                      value={[options.quality]}
+                      min={0}
+                      max={100}
+                      step={1}
+                      className="pt-2"
+                      onValueChange={([value]) => setOptions({ ...options, quality: value })}
+                    />
                   </div>
                 </div>
 
@@ -604,69 +577,67 @@ return (
                     <Label htmlFor="resize">Resize Images</Label>
                     <Switch
                       id="resize"
-                      checked={config.resize}
-                      onCheckedChange={(checked) => setConfig({ ...config, resize: checked })}
+                      checked={options.resize}
+                      onCheckedChange={(checked) => setOptions({ ...options, resize: checked })}
                     />
                   </div>
 
-                  {config.resize && (
+                  {options.resize && (
                     <motion.div
                       initial={{ opacity: 0, height: 0 }}
                       animate={{ opacity: 1, height: 'auto' }}
                       exit={{ opacity: 0, height: 0 }}
-                      className="space-y-4"
+                      className="grid grid-cols-2 gap-4"
                     >
-                      <div className="grid grid-cols-2 gap-4">
-                        <div className="space-y-2">
-                          <Label>Width (px)</Label>
-                          <Input
-                            type="number"
-                            value={config.width}
-                            onChange={(e) => setConfig({ 
-                              ...config, 
-                              width: parseInt(e.target.value) || config.width 
-                            })}
-                            min={1}
-                          />
-                        </div>
-                        <div className="space-y-2">
-                          <Label>Height (px)</Label>
-                          <Input
-                            type="number"
-                            value={config.height}
-                            onChange={(e) => setConfig({ 
-                              ...config, 
-                              height: parseInt(e.target.value) || config.height 
-                            })}
-                            min={1}
-                          />
-                        </div>
+                      <div className="space-y-2">
+                        <Label>Width (px)</Label>
+                        <Input
+                          type="number"
+                          value={options.width}
+                          onChange={(e) => setOptions({ 
+                            ...options, 
+                            width: parseInt(e.target.value) || 0 
+                          })}
+                        />
                       </div>
-
-                      <div className="flex items-center justify-between">
-                        <Label htmlFor="aspectRatio">Maintain Aspect Ratio</Label>
-                        <Switch
-                          id="aspectRatio"
-                          checked={config.maintainAspectRatio}
-                          onCheckedChange={(checked) => 
-                            setConfig({ ...config, maintainAspectRatio: checked })
-                          }
+                      <div className="space-y-2">
+                        <Label>Height (px)</Label>
+                        <Input
+                          type="number"
+                          value={options.height}
+                          onChange={(e) => setOptions({ 
+                            ...options, 
+                            height: parseInt(e.target.value) || 0 
+                          })}
                         />
                       </div>
                     </motion.div>
                   )}
+
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="aspectRatio">Maintain Aspect Ratio</Label>
+                    <Switch
+                      id="aspectRatio"
+                      checked={options.maintainAspectRatio}
+                      onCheckedChange={(checked) => setOptions({ 
+                        ...options, 
+                        maintainAspectRatio: checked 
+                      })}
+                    />
+                  </div>
                 </div>
 
-                {/* Image Enhancements */}
+                {/* Image Enhancement Options */}
                 <div className="space-y-4 border-t pt-4">
                   <div className="flex items-center justify-between">
                     <Label htmlFor="colorCorrection">Color Correction</Label>
                     <Switch
                       id="colorCorrection"
-                      checked={config.colorCorrection}
-                      onCheckedChange={(checked) => 
-                        setConfig({ ...config, colorCorrection: checked })
-                      }
+                      checked={options.colorCorrection}
+                      onCheckedChange={(checked) => setOptions({ 
+                        ...options, 
+                        colorCorrection: checked 
+                      })}
                     />
                   </div>
 
@@ -674,79 +645,27 @@ return (
                     <Label htmlFor="sharpen">Sharpen</Label>
                     <Switch
                       id="sharpen"
-                      checked={config.sharpen}
-                      onCheckedChange={(checked) => 
-                        setConfig({ ...config, sharpen: checked })
-                      }
+                      checked={options.sharpen}
+                      onCheckedChange={(checked) => setOptions({ 
+                        ...options, 
+                        sharpen: checked 
+                      })}
                     />
                   </div>
 
-                  {/* Advanced Adjustments */}
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between">
-                      <Label>Brightness</Label>
-                      <span className="text-sm text-gray-500">
-                        {config.brightness > 0 ? '+' : ''}{config.brightness}
-                      </span>
-                    </div>
-                    <Slider
-                      value={[config.brightness]}
-                      min={-100}
-                      max={100}
-                      step={1}
-                      onValueChange={([value]) => 
-                        setConfig({ ...config, brightness: value })
-                      }
-                    />
-
-                    <div className="flex items-center justify-between">
-                      <Label>Contrast</Label>
-                      <span className="text-sm text-gray-500">
-                        {config.contrast > 0 ? '+' : ''}{config.contrast}
-                      </span>
-                    </div>
-                    <Slider
-                      value={[config.contrast]}
-                      min={-100}
-                      max={100}
-                      step={1}
-                      onValueChange={([value]) => 
-                        setConfig({ ...config, contrast: value })
-                      }
-                    />
-
-                    <div className="flex items-center justify-between">
-                      <Label>Saturation</Label>
-                      <span className="text-sm text-gray-500">
-                        {config.saturation > 0 ? '+' : ''}{config.saturation}
-                      </span>
-                    </div>
-                    <Slider
-                      value={[config.saturation]}
-                      min={-100}
-                      max={100}
-                      step={1}
-                      onValueChange={([value]) => 
-                        setConfig({ ...config, saturation: value })
-                      }
-                    />
-                  </div>
-                </div>
-
-                {/* Watermark Option */}
-                <div className="space-y-4 border-t pt-4">
                   <div className="flex items-center justify-between">
                     <Label htmlFor="watermark">Add Watermark</Label>
                     <Switch
                       id="watermark"
-                      checked={config.watermark}
-                      onCheckedChange={(checked) => 
-                        setConfig({ ...config, watermark: checked })
-                      }
+                      checked={options.watermark}
+                      onCheckedChange={(checked) => setOptions({ 
+                        ...options, 
+                        watermark: checked 
+                      })}
                     />
                   </div>
 
-                  {config.watermark && (
+                  {options.watermark && (
                     <motion.div
                       initial={{ opacity: 0, height: 0 }}
                       animate={{ opacity: 1, height: 'auto' }}
@@ -755,38 +674,107 @@ return (
                     >
                       <Label>Watermark Text</Label>
                       <Input
-                        value={config.watermarkText}
-                        onChange={(e) => 
-                          setConfig({ ...config, watermarkText: e.target.value })
-                        }
+                        value={options.watermarkText}
+                        onChange={(e) => setOptions({ 
+                          ...options, 
+                          watermarkText: e.target.value 
+                        })}
                         placeholder="Enter watermark text"
                       />
                     </motion.div>
                   )}
                 </div>
 
-                {/* Action Buttons */}
-                <div className="flex space-x-4 pt-4">
+                {/* Advanced Filters Section */}
+                <div className="space-y-4 border-t pt-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center space-x-2">
+                      <Filter className="h-4 w-4 text-gray-500" />
+                      <Label>Advanced Filters</Label>
+                    </div>
+                    <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={resetAdvancedFilters}
+                            className="h-8 w-8 p-0"
+                          >
+                            <RefreshCw className="h-4 w-4" />
+                          </Button>
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          Reset all filters
+                        </TooltipContent>
+                      </Tooltip>
+                    </TooltipProvider>
+                  </div>
+
+                  <div className="space-y-6">
+                    {Object.entries(options.advancedFilters).map(([key, value]) => (
+                      <div key={key} className="space-y-2">
+                        <div className="flex justify-between">
+                          <Label className="capitalize">{key}</Label>
+                          <span className="text-sm text-gray-500">
+                            {value > 0 ? '+' : ''}{value}
+                          </span>
+                        </div>
+                        <Slider
+                          value={[value]}
+                          min={-100}
+                          max={100}
+                          step={1}
+                          className="pt-2"
+                          onValueChange={([newValue]) => setOptions(prev => ({
+                            ...prev,
+                            advancedFilters: {
+                              ...prev.advancedFilters,
+                              [key]: newValue
+                            }
+                          }))}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Processing Notes */}
+                <div className="space-y-2 border-t pt-4">
+                  <Label>Processing Notes</Label>
+                  <Textarea
+                    value={options.processingNotes}
+                    onChange={(e) => setOptions(prev => ({
+                      ...prev,
+                      processingNotes: e.target.value
+                    }))}
+                    placeholder="Add any special instructions or notes for this batch of images..."
+                    className="min-h-[100px] resize-y"
+                  />
+                </div>
+
+                <div className="flex space-x-4">
                   <Button
                     variant="outline"
                     onClick={() => setActiveTab('upload')}
                     className="flex-1"
                   >
-                    <RefreshCw className="h-4 w-4 mr-2" />
+                    <RefreshCw className="mr-2 h-4 w-4" />
                     Back to Upload
                   </Button>
                   <Button
                     className="flex-1"
                     onClick={() => setShowConfirmDialog(true)}
-                    disabled={files.length === 0 || files.some(f => f.status !== 'complete')}
+                    disabled={files.length === 0 || files.some(f => f.status === 'uploading')}
                   >
-                    <Settings className="h-4 w-4 mr-2" />
+                    <Filter className="mr-2 h-4 w-4" />
                     Process Images
                   </Button>
                 </div>
               </div>
             </TabsContent>
 
+            {/* Results Tab */}
             <TabsContent value="results">
               <div className="space-y-6">
                 {processing ? (
@@ -799,7 +787,7 @@ return (
                     </motion.div>
                     <Progress value={progress} className="w-64 mt-4" />
                     <p className="mt-4 text-sm text-gray-500">
-                      {currentStage}... {progress}%
+                      {currentStage || `Processing... ${progress}%`}
                     </p>
                   </div>
                 ) : processedFiles.length > 0 ? (
@@ -808,18 +796,6 @@ return (
                     animate={{ opacity: 1 }}
                     className="space-y-6"
                   >
-                    <div className="flex items-center justify-between">
-                      <h3 className="text-lg font-medium">Processed Images</h3>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={handleDownloadAll}
-                      >
-                        <Download className="h-4 w-4 mr-2" />
-                        Download All
-                      </Button>
-                    </div>
-
                     <div className="grid grid-cols-2 gap-6">
                       {processedFiles.map((file, index) => (
                         <motion.div
@@ -834,7 +810,7 @@ return (
                               <div className="relative aspect-video mb-4 overflow-hidden rounded-lg">
                                 <Image
                                   src={file.url}
-                                  alt={`Processed ${file.original}`}
+                                  alt={`Processed version of ${file.original}`}
                                   fill
                                   className="object-cover transition-transform group-hover:scale-105"
                                   sizes="(max-width: 768px) 100vw, (max-width: 1200px) 50vw, 33vw"
@@ -842,35 +818,74 @@ return (
                               </div>
                               <div className="space-y-2">
                                 <div className="flex items-center justify-between">
-                                  <p className="font-medium truncate">
-                                    {file.original}
-                                  </p>
-                                  <TooltipProvider>
-                                    <Tooltip>
-                                      <TooltipTrigger asChild>
-                                        <Button
-                                          variant="ghost"
-                                          size="sm"
-                                          onClick={() => handleDownload(file)}
-                                        >
-                                          <Download className="h-4 w-4" />
-                                        </Button>
-                                      </TooltipTrigger>
-                                      <TooltipContent>
-                                        Download processed image
-                                      </TooltipContent>
-                                    </Tooltip>
-                                  </TooltipProvider>
+                                  <div className="flex-1">
+                                    <p className="font-medium truncate">{file.original}</p>
+                                    <p className="text-sm text-gray-500">
+                                      Processed {file.metadata.created && 
+                                        new Date(file.metadata.created).toLocaleString()}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center space-x-2">
+                                    {file.metadata.location && (
+                                      <TooltipProvider>
+                                        <Tooltip>
+                                          <TooltipTrigger>
+                                            <div className="text-xs text-gray-500">
+                                              📍 {file.metadata.location.latitude.toFixed(2)},
+                                              {file.metadata.location.longitude.toFixed(2)}
+                                            </div>
+                                          </TooltipTrigger>
+                                          <TooltipContent>
+                                            Location metadata preserved
+                                          </TooltipContent>
+                                        </Tooltip>
+                                      </TooltipProvider>
+                                    )}
+                                    <TooltipProvider>
+                                      <Tooltip>
+                                        <TooltipTrigger asChild>
+                                          <Button
+                                            variant="ghost"
+                                            size="sm"
+                                            onClick={() => {
+                                              const link = document.createElement('a');
+                                              link.href = file.url;
+                                              link.download = file.processed;
+                                              document.body.appendChild(link);
+                                              link.click();
+                                              document.body.removeChild(link);
+                                              
+                                              // Update status to downloaded
+                                              setProcessedFiles(prev => 
+                                                prev.map(f => 
+                                                  f.processed === file.processed 
+                                                    ? { ...f, status: 'downloaded' } 
+                                                    : f
+                                                )
+                                              );
+                                            }}
+                                          >
+                                            <Download className={`h-4 w-4 ${
+                                              file.status === 'downloaded' ? 'text-green-500' : ''
+                                            }`} />
+                                          </Button>
+                                        </TooltipTrigger>
+                                        <TooltipContent>
+                                          {file.status === 'downloaded' 
+                                            ? 'Downloaded' 
+                                            : 'Download processed image'}
+                                        </TooltipContent>
+                                      </Tooltip>
+                                    </TooltipProvider>
+                                  </div>
                                 </div>
                                 <div className="text-sm text-gray-500 space-y-1">
-                                  <p>Size: {formatFileSize(file.metadata.size)}</p>
-                                  <p>
-                                    Dimensions: {file.metadata.width}x
-                                    {file.metadata.height}px
-                                  </p>
-                                  <p>
-                                    Format: {file.metadata.format.toUpperCase()}
-                                  </p>
+                                  <p>Size: {(file.metadata.size / 1024).toFixed(2)} KB</p>
+                                  <p>Dimensions: {file.metadata.width}x{file.metadata.height}px</p>
+                                  <p>Format: {file.metadata.format.toUpperCase()}</p>
+                                  {file.notes && (
+                                    <p className="text-gray-600 italic mt-2">"{file.notes}"</p>
+                                  )}
                                 </div>
                               </div>
                             </CardContent>
@@ -878,11 +893,42 @@ return (
                         </motion.div>
                       ))}
                     </div>
-
-                    <div className="flex justify-between pt-4">
-                      <Button variant="outline" onClick={handleReset}>
-                        <RefreshCw className="h-4 w-4 mr-2" />
+                    <div className="flex justify-between">
+                      <Button
+                        variant="outline"
+                        onClick={() => {
+                          setFiles([]);
+                          setProcessedFiles([]);
+                          setOptions(defaultProcessingOptions);
+                          setActiveTab('upload');
+                        }}
+                      >
+                        <RefreshCw className="mr-2 h-4 w-4" />
                         Process New Images
+                      </Button>
+                      <Button
+                        onClick={() => {
+                          const zip = new JSZip();
+                          processedFiles.forEach(file => {
+                            zip.file(file.processed, fetch(file.url).then(res => res.blob()));
+                          });
+                          zip.generateAsync({ type: 'blob' }).then(content => {
+                            const link = document.createElement('a');
+                            link.href = URL.createObjectURL(content);
+                            link.download = 'processed-images.zip';
+                            document.body.appendChild(link);
+                            link.click();
+                            document.body.removeChild(link);
+                            
+                            // Mark all as downloaded
+                            setProcessedFiles(prev => 
+                              prev.map(f => ({ ...f, status: 'downloaded' }))
+                            );
+                          });
+                        }}
+                      >
+                        <Download className="mr-2 h-4 w-4" />
+                        Download All
                       </Button>
                     </div>
                   </motion.div>
@@ -895,9 +941,7 @@ return (
                 ) : (
                   <div className="text-center py-12">
                     <ImageIcon className="h-12 w-12 mx-auto text-gray-400" />
-                    <p className="mt-4 text-gray-500">
-                      No processed images yet
-                    </p>
+                    <p className="mt-4 text-gray-500">No processed images yet</p>
                   </div>
                 )}
               </div>
@@ -913,50 +957,52 @@ return (
             <AlertDialogTitle>Confirm Processing</AlertDialogTitle>
             <AlertDialogDescription>
               <div className="space-y-4">
-                <p>Process {files.length} image(s) with the following settings:</p>
-                <div className="rounded-lg bg-gray-50 p-4 space-y-2 text-sm">
-                  <p><strong>Output Format:</strong> {config.outputFormat}</p>
-                  <p><strong>Quality:</strong> {config.quality}%</p>
-                  {config.resize && (
-                    <p>
-                      <strong>Resize:</strong> {config.width}x{config.height}px
-                      {config.maintainAspectRatio && ' (maintaining aspect ratio)'}
+                <p>You are about to process {files.filter(f => f.status === 'complete').length} image(s) with the following settings:</p>
+                
+                <div className="rounded-lg bg-gray-50 p-4 space-y-2">
+                  <p><strong>Output Format:</strong> {options.outputFormat}</p>
+                  <p><strong>Quality:</strong> {options.quality}%</p>
+                  
+                  {options.resize && (
+                    <p><strong>Resize:</strong> {options.width}x{options.height}px
+                      {options.maintainAspectRatio && ' (maintaining aspect ratio)'}
                     </p>
                   )}
-                  {config.colorCorrection && (
-                    <p><strong>Color Correction:</strong> Enabled</p>
-                  )}
-                  {config.sharpen && <p><strong>Sharpen:</strong> Enabled</p>}
-                  {config.watermark && (
-                    <p><strong>Watermark:</strong> "{config.watermarkText}"</p>
-                  )}
-                  {(config.brightness !== 0 || 
-                    config.contrast !== 0 || 
-                    config.saturation !== 0) && (
+                  
+                  {options.colorCorrection && <p><strong>Color Correction:</strong> Enabled</p>}
+                  {options.sharpen && <p><strong>Sharpening:</strong> Enabled</p>}
+                  
+                  {Object.entries(options.advancedFilters).some(([_, value]) => value !== 0) && (
                     <div>
-                      <strong>Adjustments:</strong>
+                      <strong>Advanced Filters:</strong>
                       <ul className="ml-4 mt-1">
-                        {config.brightness !== 0 && (
-                          <li>Brightness: {config.brightness > 0 ? '+' : ''}
-                            {config.brightness}
-                          </li>
+                        {options.advancedFilters.brightness !== 0 && (
+                          <li>Brightness: {options.advancedFilters.brightness > 0 ? '+' : ''}{options.advancedFilters.brightness}</li>
                         )}
-                        {config.contrast !== 0 && (
-                          <li>Contrast: {config.contrast > 0 ? '+' : ''}
-                            {config.contrast}
-                          </li>
+                        {options.advancedFilters.contrast !== 0 && (
+                          <li>Contrast: {options.advancedFilters.contrast > 0 ? '+' : ''}{options.advancedFilters.contrast}</li>
                         )}
-                        {config.saturation !== 0 && (
-                          <li>Saturation: {config.saturation > 0 ? '+' : ''}
-                            {config.saturation}
-                          </li>
+                        {options.advancedFilters.saturation !== 0 && (
+                          <li>Saturation: {options.advancedFilters.saturation > 0 ? '+' : ''}{options.advancedFilters.saturation}</li>
                         )}
                       </ul>
                     </div>
                   )}
+                  
+                  {options.watermark && (
+                    <p><strong>Watermark:</strong> "{options.watermarkText}"</p>
+                  )}
+                  
+                  {options.processingNotes && (
+                    <div className="mt-2">
+                      <strong>Notes:</strong>
+                      <p className="text-sm text-gray-600 mt-1">{options.processingNotes}</p>
+                    </div>
+                  )}
                 </div>
+                
                 <p className="text-sm text-gray-500">
-                  This process cannot be undone.
+                  This process cannot be undone. Processed images will be available for download.
                 </p>
               </div>
             </AlertDialogDescription>
@@ -969,53 +1015,11 @@ return (
                 handleProcess();
               }}
             >
-              <Settings className="mr-2 h-4 w-4" />
-              Process Images
+              Proceed with Processing
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-
-      {/* Success Toast Alert */}
-      <AnimatePresence>
-        {processedFiles.length > 0 && (
-          <motion.div
-            initial={{ opacity: 0, y: 50 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -50 }}
-            className="fixed bottom-4 right-4 z-50"
-          >
-            <Alert className="bg-green-50 border-green-200">
-              <Check className="h-4 w-4 text-green-600" />
-              <AlertTitle className="text-green-600">Success</AlertTitle>
-              <AlertDescription className="text-green-600">
-                Successfully processed {processedFiles.length} image(s)
-              </AlertDescription>
-            </Alert>
-          </motion.div>
-        )}
-      </AnimatePresence>
-
-      {/* Error Toast Alert */}
-      <AnimatePresence>
-        {error && (
-          <motion.div
-            initial={{ opacity: 0, y: 50 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -50 }}
-            className="fixed bottom-4 right-4 z-50"
-          >
-            <Alert variant="destructive">
-              <AlertCircle className="h-4 w-4" />
-              <AlertTitle>Error</AlertTitle>
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          </motion.div>
-        )}
-      </AnimatePresence>
     </div>
   );
 }
-
-export default ImageProcessing;
-
