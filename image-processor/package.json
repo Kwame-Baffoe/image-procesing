@@ -4,9 +4,10 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "next build && npm run setup-magick",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "setup-magick": "cp node_modules/@imagemagick/magick-wasm/magick.wasm public/"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.687.0",
@@ -44,6 +45,8 @@
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",
+    "copyfiles": "^2.4.1",
+    "cross-env": "^7.0.3",
     "eslint": "^8",
     "eslint-config-next": "15.0.3",
     "postcss": "^8",
