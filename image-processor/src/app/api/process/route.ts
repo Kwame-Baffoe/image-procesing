@@ -1,172 +1,159 @@
-import { NextResponse } from 'next/server';
-import { readFile, writeFile } from 'fs/promises';
-import { join } from 'path';
-import { call, initializeImageMagick } from '@imagemagick/magick-wasm';
+// app/api/process/route.ts
+import { NextRequest, NextResponse } from 'next/server';
+import { writeFile } from 'fs/promises';
+import path from 'path';
+import sharp from 'sharp';
 
-// Initialize ImageMagick WASM
-let initialized = false;
-
-async function ensureImageMagickInit() {
-  if (!initialized) {
-    await initializeImageMagick();
-    initialized = true;
-  }
-}
-
-interface ProcessingOptions {
-  format: 'jpg' | 'png' | 'webp';
-  quality: number;
-  resize?: {
-    enabled: boolean;
-    width: number;
-    height: number;
-    maintainAspectRatio: boolean;
-  };
-  compression?: {
-    enabled: boolean;
-    level: number;
-  };
-}
-
-interface ImageMetadata {
-  format: string;
-  width: number;
-  height: number;
-  colorSpace: string;
-  quality: number;
-  size: number;
-  compression: string;
-  colorDepth: number;
-}
-
-async function getImageMetadata(buffer: Buffer): Promise<ImageMetadata> {
-  await ensureImageMagickInit();
-  
-  const result = await call([{
-    name: 'input.png',
-    content: buffer
-  }], ['identify', '-verbose', 'input.png']);
-
-  if (!result.success) {
-    throw new Error('Failed to get image metadata');
-  }
-
-  const output = result.stdout;
-  
-  // Parse the verbose output to extract metadata
-  const metadata: Partial<ImageMetadata> = {};
-  
-  // Extract basic properties from identify output
-  const formatMatch = output.match(/Format: (\w+)/);
-  const dimensionsMatch = output.match(/Geometry: (\d+)x(\d+)/);
-  const colorSpaceMatch = output.match(/Colorspace: (\w+)/);
-  const qualityMatch = output.match(/Quality: (\d+)/);
-  const sizeMatch = output.match(/File size: (\d+)/);
-  const compressionMatch = output.match(/Compression: (\w+)/);
-  const depthMatch = output.match(/Depth: (\d+)/);
-
-  metadata.format = formatMatch?.[1] || 'unknown';
-  metadata.width = dimensionsMatch ? parseInt(dimensionsMatch[1]) : 0;
-  metadata.height = dimensionsMatch ? parseInt(dimensionsMatch[2]) : 0;
-  metadata.colorSpace = colorSpaceMatch?.[1] || 'unknown';
-  metadata.quality = qualityMatch ? parseInt(qualityMatch[1]) : 0;
-  metadata.size = sizeMatch ? parseInt(sizeMatch[1]) : 0;
-  metadata.compression = compressionMatch?.[1] || 'none';
-  metadata.colorDepth = depthMatch ? parseInt(depthMatch[1]) : 0;
-
-  return metadata as ImageMetadata;
-}
-
-export async function POST(request: Request) {
+export async function POST(request: NextRequest) {
   try {
-    await ensureImageMagickInit();
+    const { fileUrl, options } = await request.json();
 
-    const { fileUrl, options } = await request.json() as { 
-      fileUrl: string,
-      options: ProcessingOptions 
-    };
+    // Get file path from URL
+    const relativePath = fileUrl.replace(/^\//, '');
+    const filepath = path.join(process.cwd(), 'public', relativePath);
 
-    // Read the input file
-    const filepath = join(process.cwd(), 'public', fileUrl.replace(/^\//, ''));
-    const inputBuffer = await readFile(filepath);
+    // Initialize sharp with the input file
+    let imageProcess = sharp(filepath);
 
-    // Get original metadata
-    const originalMetadata = await getImageMetadata(inputBuffer);
-
-    // Prepare ImageMagick commands
-    const commands = ['convert', 'input.png'];
-
-    // Add resize command if enabled
+    // Apply resize if enabled
     if (options.resize?.enabled) {
-      const resizeOp = options.resize.maintainAspectRatio
-        ? `${options.resize.width}x${options.resize.height}>`
-        : `${options.resize.width}x${options.resize.height}!`;
-      commands.push('-resize', resizeOp);
+      imageProcess = imageProcess.resize({
+        width: options.resize.width,
+        height: options.resize.height,
+        fit: options.resize.maintainAspectRatio ? 'inside' : 'fill'
+      });
     }
 
-    // Add compression if enabled
-    if (options.compression?.enabled) {
-      commands.push('-quality', options.compression.level.toString());
+    // Process based on format with correct quality options
+    let processedImage;
+    const compressionLevel = options.compression.enabled 
+      ? options.compression.level 
+      : options.quality;
+
+    switch (options.format.toLowerCase()) {
+      case 'jpg':
+      case 'jpeg':
+        processedImage = await imageProcess
+          .jpeg({
+            quality: compressionLevel,
+            mozjpeg: true // Better compression for JPEG
+          })
+          .toBuffer({ resolveWithObject: true });
+        break;
+
+      case 'png':
+        processedImage = await imageProcess
+          .png({
+            quality: compressionLevel,
+            compressionLevel: Math.floor((100 - compressionLevel) / 10), // Convert 0-100 to 9-0
+            palette: true // Better compression for PNG
+          })
+          .toBuffer({ resolveWithObject: true });
+        break;
+
+      case 'webp':
+        processedImage = await imageProcess
+          .webp({
+            quality: compressionLevel,
+            lossless: compressionLevel === 100
+          })
+          .toBuffer({ resolveWithObject: true });
+        break;
+
+      default:
+        throw new Error('Unsupported format');
     }
 
-    // Set output format
-    commands.push(`output.${options.format}`);
-
-    // Process the image
-    const result = await call([{
-      name: 'input.png',
-      content: inputBuffer
-    }], commands);
-
-    if (!result.success || !result.files?.[0]) {
-      throw new Error('Image processing failed');
-    }
-
-    // Save the processed image
-    const processedBuffer = result.files[0].content;
+    // Generate output filename
     const timestamp = Date.now();
-    const processedFilename = `processed-${timestamp}.${options.format}`;
-    const processedFilepath = join(process.cwd(), 'public', 'uploads', processedFilename);
-    
-    await writeFile(processedFilepath, processedBuffer);
+    const outputFilename = `processed-${timestamp}.${options.format}`;
+    const outputPath = path.join(process.cwd(), 'public', 'uploads', outputFilename);
 
-    // Get processed metadata
-    const processedMetadata = await getImageMetadata(processedBuffer);
+    // Save processed image
+    await writeFile(outputPath, processedImage.data);
+
+    // Get processed image metadata
+    const metadata = await sharp(outputPath).metadata();
 
     // Calculate compression ratio
-    const compressionRatio = ((originalMetadata.size - processedMetadata.size) / originalMetadata.size * 100).toFixed(2);
-
-    // Save metadata
-    const metadataContent = {
-      original: originalMetadata,
-      processed: processedMetadata,
-      processing: {
-        compressionRatio: `${compressionRatio}%`,
-        options,
-        timestamp: new Date().toISOString()
-      }
-    };
-
-    const metadataFilename = `metadata-${timestamp}.json`;
-    await writeFile(
-      join(process.cwd(), 'public', 'uploads', metadataFilename),
-      JSON.stringify(metadataContent, null, 2)
-    );
+    const originalStats = await sharp(filepath).metadata();
+    const originalSize = (await sharp(filepath).toBuffer()).length;
+    const processedSize = processedImage.data.length;
+    const compressionRatio = ((originalSize - processedSize) / originalSize * 100).toFixed(2);
 
     return NextResponse.json({
       success: true,
-      url: `/uploads/${processedFilename}`,
-      metadata: metadataContent
+      url: `/uploads/${outputFilename}`,
+      metadata: {
+        original: {
+          width: originalStats.width,
+          height: originalStats.height,
+          format: originalStats.format,
+          size: originalSize,
+          colorSpace: originalStats.space,
+          channels: originalStats.channels,
+          hasAlpha: originalStats.hasAlpha
+        },
+        processed: {
+          width: metadata.width,
+          height: metadata.height,
+          format: metadata.format,
+          size: processedSize,
+          colorSpace: metadata.space,
+          channels: metadata.channels,
+          hasAlpha: metadata.hasAlpha
+        },
+        processing: {
+          compressionRatio: `${compressionRatio}%`,
+          appliedOptions: {
+            format: options.format,
+            quality: compressionLevel,
+            resize: options.resize,
+            compression: options.compression
+          }
+        }
+      }
     });
 
   } catch (error) {
     console.error('Processing error:', error);
     return NextResponse.json(
       { 
-        success: false,
-        error: error instanceof Error ? error.message : 'Processing failed' 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Failed to process image'
       },
       { status: 500 }
     );
   }
+}
+
+// Validate we're receiving correct types
+interface ProcessingRequest {
+  fileUrl: string;
+  options: {
+    format: 'jpg' | 'jpeg' | 'png' | 'webp';
+    quality: number;
+    resize?: {
+      enabled: boolean;
+      width: number;
+      height: number;
+      maintainAspectRatio: boolean;
+    };
+    compression: {
+      enabled: boolean;
+      level: number;
+    };
+  };
+}
+
+// Helper function to validate request
+function validateRequest(data: unknown): data is ProcessingRequest {
+  const request = data as ProcessingRequest;
+  return (
+    typeof request?.fileUrl === 'string' &&
+    typeof request?.options?.format === 'string' &&
+    typeof request?.options?.quality === 'number' &&
+    (!request?.options?.resize || typeof request.options.resize.enabled === 'boolean') &&
+    typeof request?.options?.compression?.enabled === 'boolean'
+  );
 }
