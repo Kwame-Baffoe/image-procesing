@@ -1,6 +1,34 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { writeFile, mkdir } from 'fs/promises';
+import { writeFile, mkdir, readdir, unlink } from 'fs/promises';
 import path from 'path';
+
+// Use a file-based lock system instead of memory variable
+const LOCK_FILE = path.join(process.cwd(), 'upload.lock');
+const fs = require('fs').promises;
+
+// Check if upload is in progress
+const isUploadLocked = async (): Promise<boolean> => {
+  try {
+    await fs.access(LOCK_FILE);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+// Create lock
+const createLock = async () => {
+  await fs.writeFile(LOCK_FILE, Date.now().toString());
+};
+
+// Remove lock
+const removeLock = async () => {
+  try {
+    await fs.unlink(LOCK_FILE);
+  } catch (err) {
+    console.error('Error removing lock:', err);
+  }
+};
 
 // Custom error handler
 const handleError = (error: unknown, status = 500) => {
@@ -25,69 +53,77 @@ const validateFileSize = (size: number) => {
   }
 };
 
-// Generate unique filename
-const generateUniqueFilename = (originalName: string): string => {
-  const timestamp = Date.now();
-  const random = Math.random().toString(36).substring(2, 15);
-  const extension = path.extname(originalName).toLowerCase();
-  return `${timestamp}-${random}${extension}`;
-};
-
-// Ensure upload directory exists
-const ensureUploadDirectory = async () => {
+// Clear upload directory
+const clearUploadDirectory = async () => {
   const uploadDir = path.join(process.cwd(), 'public', 'uploads');
   try {
     await mkdir(uploadDir, { recursive: true });
+    const files = await readdir(uploadDir);
+    await Promise.all(
+      files.map(file => unlink(path.join(uploadDir, file)))
+    );
     return uploadDir;
-  } catch (err) { // Changed from error to err to avoid shadow naming
+  } catch (err) {
     if ((err as { code?: string }).code !== 'EEXIST') {
-      throw new Error('Failed to create upload directory');
+      throw new Error('Failed to prepare upload directory');
     }
     return uploadDir;
   }
 };
 
 export async function POST(request: NextRequest) {
+  // Check for existing upload
+  if (await isUploadLocked()) {
+    return handleError(new Error('Another upload is in progress. Please wait.'), 429);
+  }
+
   try {
-    // Parse form data
+    await createLock();
+
     const formData = await request.formData();
     const file = formData.get('file') as File;
 
-    // Validate file existence
     if (!file) {
       return handleError(new Error('No file provided'), 400);
     }
 
-    // Validate file
     validateFileType(file.type);
     validateFileSize(file.size);
 
-    // Prepare upload directory
-    const uploadDir = await ensureUploadDirectory();
-    const filename = generateUniqueFilename(file.name);
+    // Clear and prepare upload directory
+    const uploadDir = await clearUploadDirectory();
+    const filename = `upload-${Date.now()}${path.extname(file.name)}`;
     const filepath = path.join(uploadDir, filename);
 
-    try {
-      // Convert file to buffer and save
-      const bytes = await file.arrayBuffer();
-      const buffer = Buffer.from(bytes);
-      await writeFile(filepath, buffer);
+    // Save file
+    const buffer = Buffer.from(await file.arrayBuffer());
+    await writeFile(filepath, buffer);
 
-      // Return success response
-      return NextResponse.json({
-        success: true,
-        filename,
-        url: `/uploads/${filename}`,
+    // Get basic image metadata
+    const imagemagick = require('imagemagick-native');
+    const metadata = imagemagick.identify({
+      srcData: buffer,
+      verbose: true
+    });
+
+    return NextResponse.json({
+      success: true,
+      filename,
+      url: `/uploads/${filename}`,
+      metadata: {
         size: file.size,
         type: file.type,
+        width: metadata.width,
+        height: metadata.height,
+        format: metadata.format,
         timestamp: Date.now()
-      });
-    } catch (err) { // Changed from error to err
-      console.error('File write error:', err);
-      return handleError(new Error('Failed to save file'));
-    }
-  } catch (err) { // Changed from error to err
+      }
+    });
+
+  } catch (err) {
     return handleError(err);
+  } finally {
+    await removeLock();
   }
 }
 

@@ -1,70 +1,72 @@
-// src/app/api/process/route.ts
 import { NextResponse } from 'next/server';
-import { writeFile } from 'fs/promises';
+import { writeFile, readFile } from 'fs/promises';
 import { join } from 'path';
-import sharp from 'sharp';
+import imagemagick from 'imagemagick-native';
+
+// Interface for image metadata
+interface ImageMetadata {
+  format: string;
+  width: number;
+  height: number;
+  colorSpace: string;
+  depth: number;
+  compression: string;
+  quality: number;
+  size: number;
+  density: {
+    width: number;
+    height: number;
+    units: string;
+  };
+  colorProfile: string;
+  properties: Record<string, string>;
+}
 
 export async function POST(request: Request) {
   try {
     const { fileUrl, options } = await request.json();
-
-    // Remove leading slash and get the correct file path
     const relativePath = fileUrl.replace(/^\//, '');
     const filepath = join(process.cwd(), 'public', relativePath);
 
-    // Create Sharp instance from the input file
-    let processedImage = sharp(filepath);
+    // Read the original image file
+    const imageBuffer = await readFile(filepath);
 
-    // Apply resize if enabled
-    if (options.resize.enabled) {
-      processedImage = processedImage.resize({
-        width: options.resize.width,
-        height: options.resize.height,
-        fit: options.resize.maintainAspectRatio ? 'inside' : 'fill',
-      });
-    }
+    // Get image metadata before processing
+    const originalMetadata = imagemagick.identify({
+      srcData: imageBuffer,
+      verbose: true
+    }) as ImageMetadata;
 
-    // Apply enhancements
-    if (Object.values(options.enhancement).some(v => v !== 0)) {
-      const brightness = 1 + (options.enhancement.brightness / 100);
-      const saturation = 1 + (options.enhancement.saturation / 100);
-      
-      processedImage = processedImage.modulate({
-        brightness,
-        saturation,
-      });
+    // Prepare ImageMagick options for processing
+    const magickOptions: any = {
+      srcData: imageBuffer,
+      format: options.format.toUpperCase(),
+      quality: options.quality
+    };
 
-      if (options.enhancement.contrast !== 0) {
-        processedImage = processedImage.linear(
-          1 + (options.enhancement.contrast / 100),
-          0
-        );
+    // Handle image scaling
+    if (options.resize?.enabled) {
+      magickOptions.width = options.resize.width;
+      magickOptions.height = options.resize.height;
+      if (options.resize.maintainAspectRatio) {
+        magickOptions.resizeStyle = 'aspectfit';
       }
     }
 
-    // Process image based on format with correct typing
-    let outputBuffer: Buffer;
-    
-    if (options.format === 'jpg') {
-      outputBuffer = await processedImage.jpeg({
-        quality: Math.min(100, Math.max(1, options.quality)),
-        force: true,
-      }).toBuffer();
-    } 
-    else if (options.format === 'png') {
-      outputBuffer = await processedImage.png({
-        force: true,
-      }).toBuffer();
+    // Handle compression
+    if (options.compression?.enabled) {
+      magickOptions.compress = 'JPEG'; // Using JPEG compression even for other formats
+      magickOptions.quality = options.compression.level;
     }
-    else if (options.format === 'webp') {
-      outputBuffer = await processedImage.webp({
-        quality: Math.min(100, Math.max(1, options.quality)),
-        force: true,
-      }).toBuffer();
-    }
-    else {
-      throw new Error('Unsupported format');
-    }
+
+    // Process the image
+    const processedBuffer = imagemagick.convert(magickOptions);
+
+    // Get processed image metadata
+    const processedMetadata = imagemagick.identify({
+      srcData: processedBuffer,
+      verbose: true
+    }) as ImageMetadata;
 
     // Generate unique filename for processed image
     const timestamp = Date.now();
@@ -73,14 +75,39 @@ export async function POST(request: Request) {
     const processedFilepath = join(process.cwd(), 'public', 'uploads', processedFilename);
 
     // Save processed image
-    await writeFile(processedFilepath, outputBuffer);
+    await writeFile(processedFilepath, processedBuffer);
 
-    // Return the URL for the processed image
+    // Calculate compression ratio
+    const compressionRatio = (originalMetadata.size - processedMetadata.size) / originalMetadata.size * 100;
+
+    // Save metadata to a JSON file
+    const metadataFilename = `metadata-${timestamp}.json`;
+    const metadataFilepath = join(process.cwd(), 'public', 'uploads', metadataFilename);
+    const metadataContent = {
+      original: {
+        ...originalMetadata,
+        filename: originalFilename,
+        path: fileUrl,
+      },
+      processed: {
+        ...processedMetadata,
+        filename: processedFilename,
+        path: `/uploads/${processedFilename}`,
+      },
+      processing: {
+        compressionRatio: compressionRatio.toFixed(2) + '%',
+        options: options,
+        timestamp: new Date().toISOString()
+      }
+    };
+
+    await writeFile(metadataFilepath, JSON.stringify(metadataContent, null, 2));
+
     return NextResponse.json({
       url: `/uploads/${processedFilename}`,
+      metadata: metadataContent,
       success: true
     });
-
   } catch (error) {
     console.error('Processing error:', error);
     return NextResponse.json(

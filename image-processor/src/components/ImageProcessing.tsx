@@ -39,7 +39,7 @@ import {
   AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
-  AlertDialogDescription,
+  // AlertDialogDescription,
   AlertDialogFooter,
   AlertDialogHeader,
   AlertDialogTitle,
@@ -285,6 +285,7 @@ export default function ImageProcessor() {
             <div className="w-1/2 relative border-r border-white/20">
               <Image
                 src={file.preview}
+                
                 alt="Original"
                 fill
                 className="object-cover"

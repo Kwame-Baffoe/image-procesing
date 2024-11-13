@@ -49,3 +49,7 @@ export async function POST(req: NextRequest) {
     );
   }
 }
+
+// we want to be able to capture all metadata an uploaded inmages is having so we can save it onn the server as well as the uploaded image
+
+  
