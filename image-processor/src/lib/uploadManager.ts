@@ -1,39 +1,44 @@
-// lib/uploadManager.ts
 class UploadManager {
-    private static instance: UploadManager;
-    private isUploading: boolean = false;
-    private uploadQueue: Array<() => Promise<void>> = [];
-  
-    private constructor() {}
-  
-    static getInstance(): UploadManager {
-      if (!UploadManager.instance) {
-        UploadManager.instance = new UploadManager();
-      }
-      return UploadManager.instance;
+  private static instance: UploadManager;
+  private uploading: boolean = false;
+
+  private constructor() {}
+
+  static getInstance(): UploadManager {
+    if (!UploadManager.instance) {
+      UploadManager.instance = new UploadManager();
     }
-  
-    async upload(uploadFn: () => Promise<void>): Promise<void> {
-      if (this.isUploading) {
-        throw new Error('An upload is already in progress');
-      }
-  
-      try {
-        this.isUploading = true;
-        await uploadFn();
-      } finally {
-        this.isUploading = false;
-      }
+    return UploadManager.instance;
+  }
+
+  canUpload(): boolean {
+    return !this.uploading;
+  }
+
+  startUpload(): void {
+    this.uploading = true;
+  }
+
+  endUpload(): void {
+    this.uploading = false;
+  }
+
+  reset(): void {
+    this.uploading = false;
+  }
+
+  async upload(uploadFn: () => Promise<void>): Promise<void> {
+    if (this.uploading) {
+      throw new Error('An upload is already in progress');
     }
-  
-    isUploadInProgress(): boolean {
-      return this.isUploading;
-    }
-  
-    reset(): void {
-      this.isUploading = false;
-      this.uploadQueue = [];
+
+    try {
+      this.uploading = true;
+      await uploadFn();
+    } finally {
+      this.uploading = false;
     }
   }
-  
-  export const uploadManager = UploadManager.getInstance();
+}
+
+export default UploadManager.getInstance();

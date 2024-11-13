@@ -1,7 +1,7 @@
 // app/page.tsx
 "use client";
 
-import React, { useCallback, useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
 import Image from "next/image";
 import { motion, AnimatePresence } from "framer-motion";
@@ -18,7 +18,7 @@ import {
   Copy,
   CheckCircle2,
   SplitSquareVertical,
-  Info
+  
 } from "lucide-react";
 
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -46,6 +46,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {config} from '../lib/config'
+import uploadManager from "@/lib/uploadManager";
 
 // Types and interfaces
 interface ImageMetadata {
@@ -57,6 +59,7 @@ interface ImageMetadata {
   quality?: number;
   channels?: string[];
   hasAlpha?: boolean;
+  uploadManager?: string[]
 }
 
 interface UploadableFile {
@@ -279,30 +282,54 @@ function ImageProcessor() {
   };
 
   // Dropzone configuration
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop: async (acceptedFiles) => {
-      const newFiles = acceptedFiles.map(file => ({
-        id: generateUniqueId(),
-        file,
-        preview: URL.createObjectURL(file),
-        progress: 0,
-        status: 'waiting' as const
-      }));
+ const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  onDrop: async (acceptedFiles) => {
+    // Allow only one file at a time
+    if (files.length > 0) {
+      toast.error('Please process or remove existing file first');
+      return;
+    }
 
-      setFiles(current => [...current, ...newFiles]);
+    if (acceptedFiles.length > 1) {
+      toast.error('Please upload only one file at a time');
+      return;
+    }
 
-      for (const fileItem of newFiles) {
-        await handleFileUpload(fileItem);
+    const newFiles = acceptedFiles.map(file => ({
+      id: generateUniqueId(),
+      file,
+      preview: URL.createObjectURL(file),
+      progress: 0,
+      status: 'waiting' as const
+    }));
+
+    try {
+      await uploadManager.upload(async () => {
+        setFiles(newFiles);
+        await handleFileUpload(newFiles[0]);
+      });
+    } catch (error) {
+      if (error instanceof Error && error.message === 'An upload is already in progress') {
+        toast.error('Please wait for the current upload to complete');
+      } else {
+        toast.error('Upload failed');
+        console.error('Upload error:', error);
       }
-    },
-    accept: {
-      'image/jpeg': ['.jpg', '.jpeg'],
-      'image/png': ['.png'],
-      'image/webp': ['.webp']
-    },
-    maxSize: 10485760, // 10MB
-    multiple: true
-  });
+      
+      // Cleanup on error
+      newFiles.forEach(file => URL.revokeObjectURL(file.preview));
+    }
+  },
+  accept: {
+    'image/jpeg': ['.jpg', '.jpeg'],
+    'image/png': ['.png'],
+    'image/webp': ['.webp']
+  },
+  maxSize: config.upload.maxFileSize,
+  multiple: false, // Disable multiple file selection
+  maxFiles: 1,
+});
+
 
   // Cleanup on unmount
   useEffect(() => {
