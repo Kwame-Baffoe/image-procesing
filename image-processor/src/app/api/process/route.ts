@@ -1,133 +1,15 @@
+
 // app/api/process/route.ts
 import { NextRequest, NextResponse } from 'next/server';
-import { writeFile } from 'fs/promises';
+import { writeFile, readFile, access } from 'fs/promises';
 import path from 'path';
 import sharp from 'sharp';
+import { execute, buildInputFile } from 'wasm-imagemagick';
+import { mkdir } from 'fs/promises';
 
-export async function POST(request: NextRequest) {
-  try {
-    const { fileUrl, options } = await request.json();
+// First, ensure the uploads directory exists
+const UPLOAD_DIR = path.join(process.cwd(), 'public', 'uploads');
 
-    // Get file path from URL
-    const relativePath = fileUrl.replace(/^\//, '');
-    const filepath = path.join(process.cwd(), 'public', relativePath);
-
-    // Initialize sharp with the input file
-    let imageProcess = sharp(filepath);
-
-    // Apply resize if enabled
-    if (options.resize?.enabled) {
-      imageProcess = imageProcess.resize({
-        width: options.resize.width,
-        height: options.resize.height,
-        fit: options.resize.maintainAspectRatio ? 'inside' : 'fill'
-      });
-    }
-
-    // Process based on format with correct quality options
-    let processedImage;
-    const compressionLevel = options.compression.enabled 
-      ? options.compression.level 
-      : options.quality;
-
-    switch (options.format.toLowerCase()) {
-      case 'jpg':
-      case 'jpeg':
-        processedImage = await imageProcess
-          .jpeg({
-            quality: compressionLevel,
-            mozjpeg: true // Better compression for JPEG
-          })
-          .toBuffer({ resolveWithObject: true });
-        break;
-
-      case 'png':
-        processedImage = await imageProcess
-          .png({
-            quality: compressionLevel,
-            compressionLevel: Math.floor((100 - compressionLevel) / 10), // Convert 0-100 to 9-0
-            palette: true // Better compression for PNG
-          })
-          .toBuffer({ resolveWithObject: true });
-        break;
-
-      case 'webp':
-        processedImage = await imageProcess
-          .webp({
-            quality: compressionLevel,
-            lossless: compressionLevel === 100
-          })
-          .toBuffer({ resolveWithObject: true });
-        break;
-
-      default:
-        throw new Error('Unsupported format');
-    }
-
-    // Generate output filename
-    const timestamp = Date.now();
-    const outputFilename = `processed-${timestamp}.${options.format}`;
-    const outputPath = path.join(process.cwd(), 'public', 'uploads', outputFilename);
-
-    // Save processed image
-    await writeFile(outputPath, processedImage.data);
-
-    // Get processed image metadata
-    const metadata = await sharp(outputPath).metadata();
-
-    // Calculate compression ratio
-    const originalStats = await sharp(filepath).metadata();
-    const originalSize = (await sharp(filepath).toBuffer()).length;
-    const processedSize = processedImage.data.length;
-    const compressionRatio = ((originalSize - processedSize) / originalSize * 100).toFixed(2);
-
-    return NextResponse.json({
-      success: true,
-      url: `/uploads/${outputFilename}`,
-      metadata: {
-        original: {
-          width: originalStats.width,
-          height: originalStats.height,
-          format: originalStats.format,
-          size: originalSize,
-          colorSpace: originalStats.space,
-          channels: originalStats.channels,
-          hasAlpha: originalStats.hasAlpha
-        },
-        processed: {
-          width: metadata.width,
-          height: metadata.height,
-          format: metadata.format,
-          size: processedSize,
-          colorSpace: metadata.space,
-          channels: metadata.channels,
-          hasAlpha: metadata.hasAlpha
-        },
-        processing: {
-          compressionRatio: `${compressionRatio}%`,
-          appliedOptions: {
-            format: options.format,
-            quality: compressionLevel,
-            resize: options.resize,
-            compression: options.compression
-          }
-        }
-      }
-    });
-
-  } catch (error) {
-    console.error('Processing error:', error);
-    return NextResponse.json(
-      { 
-        success: false, 
-        error: error instanceof Error ? error.message : 'Failed to process image'
-      },
-      { status: 500 }
-    );
-  }
-}
-
-// Validate we're receiving correct types
 interface ProcessingRequest {
   fileUrl: string;
   options: {
@@ -146,14 +28,195 @@ interface ProcessingRequest {
   };
 }
 
-// Helper function to validate request
-function validateRequest(data: unknown): data is ProcessingRequest {
-  const request = data as ProcessingRequest;
-  return (
-    typeof request?.fileUrl === 'string' &&
-    typeof request?.options?.format === 'string' &&
-    typeof request?.options?.quality === 'number' &&
-    (!request?.options?.resize || typeof request.options.resize.enabled === 'boolean') &&
-    typeof request?.options?.compression?.enabled === 'boolean'
-  );
+// Helper function to check if file exists
+async function fileExists(filePath: string): Promise<boolean> {
+  try {
+    await access(filePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Helper function to create directory if it doesn't exist
+async function ensureDir(dirPath: string): Promise<void> {
+  try {
+    await mkdir(dirPath, { recursive: true });
+  } catch (error) {
+    console.error('Error creating directory:', error);
+  }
+}
+
+// Helper function to validate file path
+async function validateFilePath(filePath: string): Promise<boolean> {
+  try {
+    const exists = await fileExists(filePath);
+    if (!exists) {
+      throw new Error(`File not found: ${filePath}`);
+    }
+    
+    // Check if it's a valid image file
+    await sharp(filePath).metadata();
+    return true;
+  } catch (error) {
+    console.error('File validation error:', error);
+    return false;
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    // Ensure uploads directory exists
+    await ensureDir(UPLOAD_DIR);
+
+    // Parse request body
+    const body = await request.json();
+    console.log('Received request body:', body);
+
+    if (!body.fileUrl || !body.options) {
+      return NextResponse.json(
+        { success: false, error: 'Missing required fields' },
+        { status: 400 }
+      );
+    }
+
+    // Clean up the file URL and get the absolute path
+    const relativePath = body.fileUrl.replace(/^\//, '');
+    const inputPath = path.join(process.cwd(), 'public', relativePath);
+    console.log('Input path:', inputPath);
+
+    // Validate input file
+    const isValid = await validateFilePath(inputPath);
+    if (!isValid) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid input file' },
+        { status: 400 }
+      );
+    }
+
+    // Create output filename
+    const timestamp = Date.now();
+    const outputFilename = `processed-${timestamp}.${body.options.format}`;
+    const outputPath = path.join(UPLOAD_DIR, outputFilename);
+    console.log('Output path:', outputPath);
+
+    try {
+      // Process with Sharp
+      const imageProcess = sharp(inputPath);
+
+      // Apply resize if enabled
+      if (body.options.resize?.enabled) {
+        imageProcess.resize({
+          width: body.options.resize.width,
+          height: body.options.resize.height,
+          fit: body.options.resize.maintainAspectRatio ? 'inside' : 'fill'
+        });
+      }
+
+      // Apply format-specific options
+      const quality = body.options.compression.enabled 
+        ? body.options.compression.level 
+        : body.options.quality;
+
+      switch (body.options.format.toLowerCase()) {
+        case 'jpg':
+        case 'jpeg':
+          imageProcess.jpeg({
+            quality,
+            mozjpeg: true
+          });
+          break;
+
+        case 'png':
+          imageProcess.png({
+            quality,
+            compressionLevel: Math.floor((100 - quality) / 10)
+          });
+          break;
+
+        case 'webp':
+          imageProcess.webp({
+            quality,
+            lossless: quality === 100
+          });
+          break;
+
+        default:
+          throw new Error('Unsupported format');
+      }
+
+      // Process the image
+      const processedImage = await imageProcess.toBuffer({ resolveWithObject: true });
+      await writeFile(outputPath, processedImage.data);
+
+      // Get metadata for both original and processed images
+      const [originalStats, originalBuffer, processedStats] = await Promise.all([
+        sharp(inputPath).metadata(),
+        readFile(inputPath),
+        sharp(outputPath).metadata()
+      ]);
+
+      const originalSize = originalBuffer.length;
+      const processedSize = processedImage.data.length;
+      const compressionRatio = ((originalSize - processedSize) / originalSize * 100).toFixed(2);
+
+      return NextResponse.json({
+        success: true,
+        url: `/uploads/${outputFilename}`,
+        metadata: {
+          original: {
+            width: originalStats.width,
+            height: originalStats.height,
+            format: originalStats.format,
+            size: originalSize,
+            colorSpace: originalStats.space,
+            channels: originalStats.channels,
+            hasAlpha: originalStats.hasAlpha
+          },
+          processed: {
+            width: processedStats.width,
+            height: processedStats.height,
+            format: processedStats.format,
+            size: processedSize,
+            colorSpace: processedStats.space,
+            channels: processedStats.channels,
+            hasAlpha: processedStats.hasAlpha
+          },
+          processing: {
+            compressionRatio: `${compressionRatio}%`,
+            appliedOptions: {
+              format: body.options.format,
+              quality: body.options.compression.enabled 
+                ? body.options.compression.level 
+                : body.options.quality,
+              resize: body.options.resize,
+              compression: body.options.compression
+            }
+          }
+        }
+      });
+
+    } catch (processingError) {
+      console.error('Processing error:', processingError);
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: processingError instanceof Error 
+            ? processingError.message 
+            : 'Image processing failed'
+        },
+        { status: 500 }
+      );
+    }
+
+  } catch (error) {
+    console.error('Route handler error:', error);
+    return NextResponse.json(
+      { 
+        success: false, 
+        error: error instanceof Error ? error.message : 'Unknown error occurred'
+      },
+      { status: 500 }
+    );
+  }
 }
