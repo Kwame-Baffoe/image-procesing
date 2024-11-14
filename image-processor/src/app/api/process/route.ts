@@ -4,29 +4,31 @@ import { NextRequest, NextResponse } from 'next/server';
 import { writeFile, readFile, access } from 'fs/promises';
 import path from 'path';
 import sharp from 'sharp';
-import { execute, buildInputFile } from 'wasm-imagemagick';
 import { mkdir } from 'fs/promises';
 
 // First, ensure the uploads directory exists
 const UPLOAD_DIR = path.join(process.cwd(), 'public', 'uploads');
 
-interface ProcessingRequest {
-  fileUrl: string;
-  options: {
-    format: 'jpg' | 'jpeg' | 'png' | 'webp';
-    quality: number;
-    resize?: {
-      enabled: boolean;
-      width: number;
-      height: number;
-      maintainAspectRatio: boolean;
-    };
-    compression: {
-      enabled: boolean;
-      level: number;
-    };
+// Only keep used types/interfaces
+type ProcessingOptions = {
+  format: 'jpg' | 'jpeg' | 'png' | 'webp';
+  quality: number;
+  resize?: {
+    enabled: boolean;
+    width: number;
+    height: number;
+    maintainAspectRatio: boolean;
   };
-}
+  compression: {
+    enabled: boolean;
+    level: number;
+  };
+};
+
+type RequestBody = {
+  fileUrl: string;
+  options: ProcessingOptions;
+};
 
 // Helper function to check if file exists
 async function fileExists(filePath: string): Promise<boolean> {
@@ -64,6 +66,18 @@ async function validateFilePath(filePath: string): Promise<boolean> {
   }
 }
 
+// Type guard for request body
+function isValidRequestBody(body: unknown): body is RequestBody {
+  const request = body as RequestBody;
+  return (
+    typeof request?.fileUrl === 'string' &&
+    typeof request?.options?.format === 'string' &&
+    typeof request?.options?.quality === 'number' &&
+    (!request?.options?.resize || typeof request.options.resize.enabled === 'boolean') &&
+    typeof request?.options?.compression?.enabled === 'boolean'
+  );
+}
+
 export async function POST(request: NextRequest) {
   try {
     // Ensure uploads directory exists
@@ -73,7 +87,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     console.log('Received request body:', body);
 
-    if (!body.fileUrl || !body.options) {
+    if (!isValidRequestBody(body)) {
       return NextResponse.json(
         { success: false, error: 'Missing required fields' },
         { status: 400 }
