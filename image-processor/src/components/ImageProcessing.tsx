@@ -1,12 +1,11 @@
-// app/page.tsx
-"use client";
-
+'use client'
 import React, { useState, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
-import Image from "next/image";
-import { motion, AnimatePresence } from "framer-motion";
 import axios from 'axios';
 import { toast } from "sonner";
+import { motion, AnimatePresence } from "framer-motion";
+import Image from "next/image";
+
 import { 
   Upload, 
   AlertCircle,
@@ -18,7 +17,13 @@ import {
   Copy,
   CheckCircle2,
   SplitSquareVertical,
-  
+  FileIcon, 
+  Grid, 
+  Palette,
+  Settings2,
+  Scale as ScaleIcon,
+  Info,
+  Wand as WandIcon
 } from "lucide-react";
 
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -27,6 +32,7 @@ import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
+import { Separator } from "@/components/ui/separator";
 import {
   Select,
   SelectContent,
@@ -46,10 +52,8 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import {config} from '../lib/config'
-import uploadManager from "@/lib/uploadManager";
 
-// Types and interfaces
+// Types and Interfaces
 interface ImageMetadata {
   format: string;
   width: number;
@@ -59,7 +63,11 @@ interface ImageMetadata {
   quality?: number;
   channels?: string[];
   hasAlpha?: boolean;
-  uploadManager?: string[]
+  density?: {
+    x: number;
+    y: number;
+    unit: string;
+  };
 }
 
 interface UploadableFile {
@@ -89,8 +97,190 @@ interface ProcessingOptions {
   };
 }
 
-// Process Dialog Component
-function ProcessingDialog({ open, progress }: { open: boolean; progress: number }) {
+// Default Options and Utilities
+const defaultProcessingOptions: ProcessingOptions = {
+  format: 'png',
+  quality: 90,
+  resize: {
+    enabled: false,
+    width: 1920,
+    height: 1080,
+    maintainAspectRatio: true
+  },
+  compression: {
+    enabled: true,
+    level: 70
+  }
+};
+
+const generateUniqueId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+const formatFileSize = (bytes: number): string => {
+  if (bytes === 0) return '0 Bytes';
+  const k = 1024;
+  const sizes = ['Bytes', 'KB', 'MB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
+};
+
+const calculateAspectRatio = (width: number, height: number): string => {
+  const gcd = (a: number, b: number): number => b === 0 ? a : gcd(b, a % b);
+  const divisor = gcd(width, height);
+  return `${width/divisor}:${height/divisor}`;
+};
+
+// Sub-Components
+const MetadataSection: React.FC<{ 
+  title: string; 
+  icon: React.ReactNode;
+  items: Array<{ label: string; value: string }>;
+}> = ({ title, icon, items }) => (
+  <div className="space-y-3">
+    <h3 className="font-medium flex items-center gap-2 text-sm">
+      {icon}
+      {title}
+    </h3>
+    <div className="grid gap-2 bg-gray-50 rounded-lg p-4">
+      {items.map(({ label, value }) => (
+        <div key={label} className="grid grid-cols-2 text-sm">
+          <span className="text-gray-600">{label}</span>
+          <span className="font-medium">{value}</span>
+        </div>
+      ))}
+    </div>
+  </div>
+);
+
+const MetadataTab: React.FC<{ file: UploadableFile }> = ({ file }) => {
+  if (!file.metadata) {
+    return (
+      <div className="text-center py-8 text-gray-500">
+        No metadata available
+      </div>
+    );
+  }
+
+  const totalPixels = file.metadata.width * file.metadata.height;
+  const aspectRatio = calculateAspectRatio(file.metadata.width, file.metadata.height);
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileIcon className="h-5 w-5" />
+            Image Details
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-6">
+            <MetadataSection
+              title="Basic Information"
+              icon={<ImageIcon className="h-4 w-4" />}
+              items={[
+                {
+                  label: "Dimensions",
+                  value: `${file.metadata.width} × ${file.metadata.height} pixels`
+                },
+                {
+                  label: "Aspect Ratio",
+                  value: aspectRatio
+                },
+                {
+                  label: "File Size",
+                  value: formatFileSize(file.file.size)
+                },
+                {
+                  label: "Format",
+                  value: file.metadata.format.toUpperCase()
+                }
+              ]}
+            />
+
+            <MetadataSection
+              title="Pixel Information"
+              icon={<Grid className="h-4 w-4" />}
+              items={[
+                {
+                  label: "Total Pixels",
+                  value: totalPixels.toLocaleString()
+                },
+                {
+                  label: "Megapixels",
+                  value: `${(totalPixels / 1000000).toFixed(2)} MP`
+                },
+                {
+                  label: "Pixel Density",
+                  value: file.metadata.density ? 
+                    `${file.metadata.density.x} × ${file.metadata.density.y} ${file.metadata.density.unit || 'ppi'}` :
+                    'Not available'
+                }
+              ]}
+            />
+
+            <MetadataSection
+              title="Color Information"
+              icon={<Palette className="h-4 w-4" />}
+              items={[
+                {
+                  label: "Color Space",
+                  value: file.metadata.colorSpace
+                },
+                {
+                  label: "Color Channels",
+                  value: file.metadata.channels?.length 
+                    ? file.metadata.channels.join(', ')
+                    : 'Not available'
+                },
+                {
+                  label: "Alpha Channel",
+                  value: file.metadata.hasAlpha ? 'Yes' : 'No'
+                }
+              ]}
+            />
+
+            {file.processedMetadata && (
+              <>
+                <Separator className="my-4" />
+                <div className="space-y-4">
+                  <h3 className="font-medium flex items-center gap-2">
+                    <WandIcon className="h-4 w-4" />
+                    Processing Results
+                  </h3>
+                  
+                  <MetadataSection
+                    title="Size Comparison"
+                    icon={<ScaleIcon className="h-4 w-4" />}
+                    items={[
+                      {
+                        label: "Original Size",
+                        value: formatFileSize(file.file.size)
+                      },
+                      {
+                        label: "Processed Size",
+                        value: formatFileSize(file.processedMetadata.size)
+                      },
+                      {
+                        label: "Size Reduction",
+                        value: `${((1 - file.processedMetadata.size / file.file.size) * 100).toFixed(1)}%`
+                      }
+                    ]}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
+
+// Processing Dialog Component
+const ProcessingDialog: React.FC<{ 
+  open: boolean; 
+  progress: number;
+}> = ({ open, progress }) => {
   return (
     <AlertDialog open={open}>
       <AlertDialogContent>
@@ -110,37 +300,10 @@ function ProcessingDialog({ open, progress }: { open: boolean; progress: number 
       </AlertDialogContent>
     </AlertDialog>
   );
-}
-
-// Default options
-const defaultProcessingOptions: ProcessingOptions = {
-  format: 'png',
-  quality: 90,
-  resize: {
-    enabled: false,
-    width: 1920,
-    height: 1080,
-    maintainAspectRatio: true
-  },
-  compression: {
-    enabled: true,
-    level: 70
-  }
-};
-
-// Utility functions
-const generateUniqueId = () => `${Date.now()}-${Math.random().toString(36).slice(2)}`;
-
-const formatFileSize = (bytes: number): string => {
-  if (bytes === 0) return '0 Bytes';
-  const k = 1024;
-  const sizes = ['Bytes', 'KB', 'MB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return `${parseFloat((bytes / Math.pow(k, i)).toFixed(2))} ${sizes[i]}`;
 };
 
 // Main ImageProcessor Component
-function ImageProcessor() {
+const ImageProcessor: React.FC = () => {
   // State management
   const [files, setFiles] = useState<UploadableFile[]>([]);
   const [activeTab, setActiveTab] = useState('upload');
@@ -282,54 +445,38 @@ function ImageProcessor() {
   };
 
   // Dropzone configuration
- const { getRootProps, getInputProps, isDragActive } = useDropzone({
-  onDrop: async (acceptedFiles) => {
-    // Allow only one file at a time
-    if (files.length > 0) {
-      toast.error('Please process or remove existing file first');
-      return;
-    }
-
-    if (acceptedFiles.length > 1) {
-      toast.error('Please upload only one file at a time');
-      return;
-    }
-
-    const newFiles = acceptedFiles.map(file => ({
-      id: generateUniqueId(),
-      file,
-      preview: URL.createObjectURL(file),
-      progress: 0,
-      status: 'waiting' as const
-    }));
-
-    try {
-      await uploadManager.upload(async () => {
-        setFiles(newFiles);
-        await handleFileUpload(newFiles[0]);
-      });
-    } catch (error) {
-      if (error instanceof Error && error.message === 'An upload is already in progress') {
-        toast.error('Please wait for the current upload to complete');
-      } else {
-        toast.error('Upload failed');
-        console.error('Upload error:', error);
+  const { getRootProps, getInputProps, isDragActive } = useDropzone({
+    onDrop: async (acceptedFiles) => {
+      if (files.length > 0) {
+        toast.error('Please process or remove existing file first');
+        return;
       }
-      
-      // Cleanup on error
-      newFiles.forEach(file => URL.revokeObjectURL(file.preview));
-    }
-  },
-  accept: {
-    'image/jpeg': ['.jpg', '.jpeg'],
-    'image/png': ['.png'],
-    'image/webp': ['.webp']
-  },
-  maxSize: config.upload.maxFileSize,
-  multiple: false, // Disable multiple file selection
-  maxFiles: 1,
-});
 
+      if (acceptedFiles.length > 1) {
+        toast.error('Please upload only one file at a time');
+        return;
+      }
+
+      const newFiles = acceptedFiles.map(file => ({
+        id: generateUniqueId(),
+        file,
+        preview: URL.createObjectURL(file),
+        progress: 0,
+        status: 'waiting' as const
+      }));
+
+      setFiles(newFiles);
+      await handleFileUpload(newFiles[0]);
+    },
+    accept: {
+      'image/jpeg': ['.jpg', '.jpeg'],
+      'image/png': ['.png'],
+      'image/webp': ['.webp']
+    },
+    maxSize: 10485760, // 10MB
+    multiple: false,
+    maxFiles: 1,
+  });
 
   // Cleanup on unmount
   useEffect(() => {
@@ -340,324 +487,287 @@ function ImageProcessor() {
     };
   }, [files]);
 
-  // File Preview Component
-  const FilePreview = ({ file }: { file: UploadableFile }) => (
-    <motion.div
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      exit={{ opacity: 0, x: -100 }}
-      className="border rounded-lg p-4"
-    >
-      <div className="flex items-center space-x-4">
-        <div className="relative h-16 w-16">
-          <Image
-            src={file.preview}
-            alt={file.file.name}
-            fill
-            className="object-cover rounded"
-          />
-        </div>
-        <div className="flex-1">
-          <p className="font-medium truncate">{file.file.name}</p>
-          <p className="text-sm text-gray-500">
-            {formatFileSize(file.file.size)}
-          </p>
-          
-          {file.status === 'uploading' && (
-            <div className="mt-2">
-              <Progress value={file.progress} className="h-1" />
-              <p className="text-xs text-gray-500 mt-1">
-                Uploading... {file.progress}%
-              </p>
+  return (
+    <div className="container mx-auto p-4 max-w-4xl">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <ImageIcon className="h-6 w-6" />
+              <span>Image Processor</span>
             </div>
-          )}
+            {processing && (
+              <div className="flex items-center text-sm text-blue-600">
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Processing... {Math.round(processingProgress)}%
+              </div>
+            )}
+          </CardTitle>
+        </CardHeader>
 
-          {file.status === 'success' && (
-            <p className="text-sm text-green-500 mt-2 flex items-center">
-              <CheckCircle2 className="h-4 w-4 mr-1" />
-              Upload complete
-            </p>
-          )}
+        <CardContent>
+          <Tabs value={activeTab} onValueChange={setActiveTab}>
+            <TabsList className="grid w-full grid-cols-4">
+              <TabsTrigger value="upload">
+                <Upload className="h-4 w-4 mr-2" />
+                Upload
+              </TabsTrigger>
+              <TabsTrigger 
+                value="process" 
+                disabled={!files.some(f => f.status === 'success')}
+              >
+                <Settings className="h-4 w-4 mr-2" />
+                Process
+              </TabsTrigger>
+              <TabsTrigger 
+                value="metadata"
+                disabled={!files.some(f => f.status === 'success')}
+              >
+                <Info className="h-4 w-4 mr-2" />
+                Metadata
+              </TabsTrigger>
+              <TabsTrigger 
+                value="results" 
+                disabled={!files.some(f => f.processedUrl)}
+              >
+                <Download className="h-4 w-4 mr-2" />
+                Results
+              </TabsTrigger>
+            </TabsList>
 
-          {file.status === 'error' && (
-            <p className="text-sm text-red-500 mt-2 flex items-center">
-              <AlertCircle className="h-4 w-4 mr-1" />
-              {file.error}
-            </p>
-          )}
-        </div>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => {
-            setFiles(current => 
-              current.filter(f => f.id !== file.id)
-            );
-            URL.revokeObjectURL(file.preview);
-          }}
-        >
-          <Trash2 className="h-4 w-4" />
-        </Button>
-      </div>
-    </motion.div>
-  );
-
-  // Image Preview Component for Results
-  const ImagePreview = ({ file }: { file: UploadableFile }) => (
-    <div className="relative aspect-video">
-      {showComparison && file.processedUrl ? (
-        <div className="relative w-full h-full flex">
-          <div className="w-1/2 relative border-r border-white/20">
-            <Image
-              src={file.preview}
-              alt="Original"
-              fill
-              className="object-cover"
-            />
-            <div className="absolute bottom-2 left-2 text-xs bg-black/70 text-white px-2 py-1 rounded">
-              Original
-            </div>
-          </div>
-          <div className="w-1/2 relative">
-            <Image
-              src={file.processedUrl}
-              alt="Processed"
-              fill
-              className="object-cover"
-            />
-            <div className="absolute bottom-2 right-2 text-xs bg-black/70 text-white px-2 py-1 rounded">
-              Processed
-            </div>
-          </div>
-        </div>
-      ) : (
-        <Image
-          src={file.processedUrl || file.preview}
-          alt={file.file.name}
-          fill
-          className="object-cover rounded-lg"
-        />
-      )}
-    </div>
-  );
-
-// Main render
-return (
-  <div className="container mx-auto p-4 max-w-4xl">
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <ImageIcon className="h-6 w-6" />
-            <span>Image Processor</span>
-          </div>
-          {processing && (
-            <div className="flex items-center text-sm text-blue-600">
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Processing... {Math.round(processingProgress)}%
-            </div>
-          )}
-        </CardTitle>
-      </CardHeader>
-
-      <CardContent>
-        <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="grid w-full grid-cols-3">
-            <TabsTrigger value="upload">
-              <Upload className="h-4 w-4 mr-2" />
-              Upload
-            </TabsTrigger>
-            <TabsTrigger 
-              value="process" 
-              disabled={!files.some(f => f.status === 'success')}
-            >
-              <Settings className="h-4 w-4 mr-2" />
-              Process
-            </TabsTrigger>
-            <TabsTrigger 
-              value="results" 
-              disabled={!files.some(f => f.processedUrl)}
-            >
-              <Download className="h-4 w-4 mr-2" />
-              Results
-            </TabsTrigger>
-          </TabsList>
-
-          {/* Upload Tab */}
-          <TabsContent value="upload">
-            <div
-              {...getRootProps()}
-              className={`
-                relative border-2 border-dashed rounded-lg p-12
-                transition-all duration-200 ease-in-out
-                ${isDragActive 
-                  ? 'border-blue-500 bg-blue-50' 
-                  : 'border-gray-300 hover:border-gray-400 hover:bg-gray-50'
-                }
-              `}
-            >
-              <input {...getInputProps()} />
-              <div className="flex flex-col items-center space-y-4">
-                <div className="relative">
-                  <div className={`
-                    absolute -inset-1 rounded-full blur-sm transition-all duration-200
-                    ${isDragActive ? 'bg-blue-100 opacity-100' : 'opacity-0'}
-                  `} />
-                  <div className={`
-                    relative rounded-full p-4 transition-all duration-200
-                    ${isDragActive ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-400'}
-                  `}>
-                    <Upload className="h-8 w-8" />
+            {/* Upload Tab */}
+            <TabsContent value="upload">
+              <div
+                {...getRootProps()}
+                className={`
+                  relative border-2 border-dashed rounded-lg p-12
+                  transition-all duration-200 ease-in-out
+                  ${isDragActive 
+                    ? 'border-blue-500 bg-blue-50' 
+                    : 'border-gray-300 hover:border-gray-400 hover:bg-gray-50'
+                  }
+                `}
+              >
+                <input {...getInputProps()} />
+                <div className="flex flex-col items-center space-y-4">
+                  <div className="relative">
+                    <div className={`
+                      absolute -inset-1 rounded-full blur-sm transition-all duration-200
+                      ${isDragActive ? 'bg-blue-100 opacity-100' : 'opacity-0'}
+                    `} />
+                    <div className={`
+                      relative rounded-full p-4 transition-all duration-200
+                      ${isDragActive ? 'bg-blue-100 text-blue-600' : 'bg-gray-100 text-gray-400'}
+                    `}>
+                      <Upload className="h-8 w-8" />
+                    </div>
+                  </div>
+                  <div className="text-center space-y-2">
+                    <p className={`text-lg transition-colors duration-200 ${
+                      isDragActive ? 'text-blue-600' : 'text-gray-600'
+                    }`}>
+                      {isDragActive ? 'Drop the files here' : 'Drag & drop files here'}
+                    </p>
+                    <p className="text-sm text-gray-500">
+                      or <button type="button" className="text-blue-500 hover:text-blue-600">browse</button>
+                    </p>
+                    <p className="text-xs text-gray-400">
+                      Supports: JPG, PNG, WebP up to 10MB
+                    </p>
                   </div>
                 </div>
-                <div className="text-center space-y-2">
-                  <p className={`text-lg transition-colors duration-200 ${
-                    isDragActive ? 'text-blue-600' : 'text-gray-600'
-                  }`}>
-                    {isDragActive ? 'Drop the files here' : 'Drag & drop files here'}
-                  </p>
-                  <p className="text-sm text-gray-500">
-                    or <button type="button" className="text-blue-500 hover:text-blue-600">browse</button>
-                  </p>
-                  <p className="text-xs text-gray-400">
-                    Supports: JPG, PNG, WebP up to 10MB
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* File List */}
-            <div className="mt-6 space-y-4">
-              <AnimatePresence>
-                {files.map((file) => (
-                  <FilePreview key={file.id} file={file} />
-                ))}
-              </AnimatePresence>
-            </div>
-          </TabsContent>
-
-          {/* Process Tab */}
-          <TabsContent value="process" className="space-y-6">
-            {/* Format Options */}
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Output Format</Label>
-                <Select
-                  value={processingOptions.format}
-                  onValueChange={(value: 'jpg' | 'png' | 'webp') => 
-                    setProcessingOptions(prev => ({ ...prev, format: value }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="jpg">JPG</SelectItem>
-                    <SelectItem value="png">PNG</SelectItem>
-                    <SelectItem value="webp">WebP</SelectItem>
-                  </SelectContent>
-                </Select>
               </div>
 
-              <div className="space-y-2">
-                <Label>Quality ({processingOptions.quality}%)</Label>
-                <Slider
-                  value={[processingOptions.quality]}
-                  min={1}
-                  max={100}
-                  step={1}
-                  onValueChange={([value]) => 
-                    setProcessingOptions(prev => ({ ...prev, quality: value }))
-                  }
-                />
+              {/* File List */}
+              <div className="mt-6 space-y-4">
+                <AnimatePresence>
+                  {files.map((file) => (
+                    <motion.div
+                      key={file.id}
+                      initial={{ opacity: 0, y: 20 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, x: -100 }}
+                      className="border rounded-lg p-4"
+                    >
+                      <div className="flex items-center space-x-4">
+                        <div className="relative h-16 w-16">
+                          <Image
+                            src={file.preview}
+                            alt={file.file.name}
+                            className="object-cover rounded w-full h-full"
+                          />
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-medium truncate">{file.file.name}</p>
+                          <p className="text-sm text-gray-500">
+                            {formatFileSize(file.file.size)}
+                          </p>
+                          
+                          {file.status === 'uploading' && (
+                            <div className="mt-2">
+                              <Progress value={file.progress} className="h-1" />
+                              <p className="text-xs text-gray-500 mt-1">
+                                Uploading... {file.progress}%
+                              </p>
+                            </div>
+                          )}
+
+                          {file.status === 'success' && (
+                            <p className="text-sm text-green-500 mt-2 flex items-center">
+                              <CheckCircle2 className="h-4 w-4 mr-1" />
+                              Upload complete
+                            </p>
+                          )}
+
+                          {file.status === 'error' && (
+                            <p className="text-sm text-red-500 mt-2 flex items-center">
+                              <AlertCircle className="h-4 w-4 mr-1" />
+                              {file.error}
+                            </p>
+                          )}
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setFiles(current => 
+                              current.filter(f => f.id !== file.id)
+                            );
+                            URL.revokeObjectURL(file.preview);
+                          }}
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </Button>
+                      </div>
+                    </motion.div>
+                  ))}
+                </AnimatePresence>
               </div>
-            </div>
+            </TabsContent>
 
-            {/* Resize Options */}
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <Label>Resize Images</Label>
-                <Switch
-                  checked={processingOptions.resize.enabled}
-                  onCheckedChange={(checked) =>
-                    setProcessingOptions(prev => ({
-                      ...prev,
-                      resize: { ...prev.resize, enabled: checked }
-                    }))
-                  }
-                />
-              </div>
-
-              {processingOptions.resize.enabled && (
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <Label>Width (px)</Label>
-                    <Input
-                      type="number"
-                      value={processingOptions.resize.width}
-                      onChange={(e) =>
-                        setProcessingOptions(prev => ({
-                          ...prev,
-                          resize: { ...prev.resize, width: parseInt(e.target.value) || 0 }
-                        }))
-                      }
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>Height (px)</Label>
-                    <Input
-                      type="number"
-                      value={processingOptions.resize.height}
-                      onChange={(e) =>
-                        setProcessingOptions(prev => ({
-                          ...prev,
-                          resize: { ...prev.resize, height: parseInt(e.target.value) || 0 }
-                        }))
-                      }
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Compression Options */}
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <Label>Enable Compression</Label>
-                <Switch
-                  checked={processingOptions.compression.enabled}
-                  onCheckedChange={(checked) =>
-                    setProcessingOptions(prev => ({
-                      ...prev,
-                      compression: { ...prev.compression, enabled: checked }
-                    }))
-                  }
-                />
-              </div>
-
-              {processingOptions.compression.enabled && (
+            {/* Process Tab */}
+            <TabsContent value="process" className="space-y-6">
+              {/* Format Options */}
+              <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <Label>Compression Level</Label>
-                    <span className="text-gray-500">{processingOptions.compression.level}%</span>
-                  </div>
+                  <Label>Output Format</Label>
+                  <Select
+                    value={processingOptions.format}
+                    onValueChange={(value: 'jpg' | 'png' | 'webp') => 
+                      setProcessingOptions(prev => ({ ...prev, format: value }))
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="jpg">JPG</SelectItem>
+                      <SelectItem value="png">PNG</SelectItem>
+                      <SelectItem value="webp">WebP</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Quality ({processingOptions.quality}%)</Label>
                   <Slider
-                    value={[processingOptions.compression.level]}
+                    value={[processingOptions.quality]}
                     min={1}
                     max={100}
                     step={1}
-                    onValueChange={([value]) =>
+                    onValueChange={([value]) => 
+                      setProcessingOptions(prev => ({ ...prev, quality: value }))
+                    }
+                  />
+                </div>
+              </div>
+
+              {/* Resize Options */}
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <Label>Resize Images</Label>
+                  <Switch
+                    checked={processingOptions.resize.enabled}
+                    onCheckedChange={(checked) =>
                       setProcessingOptions(prev => ({
                         ...prev,
-                        compression: { ...prev.compression, level: value }
+                        resize: { ...prev.resize, enabled: checked }
                       }))
                     }
                   />
                 </div>
-              )}
-            </div>
-{/* Process Button */}
-<div className="flex justify-end pt-6">
+
+                {processingOptions.resize.enabled && (
+                  <div className="grid grid-cols-2 gap-4">
+                    <div className="space-y-2">
+                      <Label>Width (px)</Label>
+                      <Input
+                        type="number"
+                        value={processingOptions.resize.width}
+                        onChange={(e) =>
+                          setProcessingOptions(prev => ({
+                            ...prev,
+                            resize: { ...prev.resize, width: parseInt(e.target.value) || 0 }
+                          }))
+                        }
+                      />
+                    </div>
+                    <div className="space-y-2">
+                      <Label>Height (px)</Label>
+                      <Input
+                        type="number"
+                        value={processingOptions.resize.height}
+                        onChange={(e) =>
+                          setProcessingOptions(prev => ({
+                            ...prev,
+                            resize: { ...prev.resize, height: parseInt(e.target.value) || 0 }
+                          }))
+                        }
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Compression Options */}
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <Label>Enable Compression</Label>
+                  <Switch
+                    checked={processingOptions.compression.enabled}
+                    onCheckedChange={(checked) =>
+                      setProcessingOptions(prev => ({
+                        ...prev,
+                        compression: { ...prev.compression, enabled: checked }
+                      }))
+                    }
+                  />
+                </div>
+
+                {processingOptions.compression.enabled && (
+                  <div className="space-y-2">
+                    <div className="flex justify-between text-sm">
+                      <Label>Compression Level</Label>
+                      <span className="text-gray-500">{processingOptions.compression.level}%</span>
+                    </div>
+                    <Slider
+                      value={[processingOptions.compression.level]}
+                      min={1}
+                      max={100}
+                      step={1}
+                      onValueChange={([value]) =>
+                        setProcessingOptions(prev => ({
+                          ...prev,
+                          compression: { ...prev.compression, level: value }
+                        }))
+                      }
+                    />
+                  </div>
+                )}
+              </div>
+
+              {/* Process Button */}
+              <div className="flex justify-end pt-6">
                 <Button
                   onClick={() => setShowProcessDialog(true)}
                   disabled={!files.some(f => f.status === 'success') || processing}
@@ -671,6 +781,21 @@ return (
                   {processing ? 'Processing...' : 'Process Images'}
                 </Button>
               </div>
+            </TabsContent>
+
+            {/* Metadata Tab */}
+            <TabsContent value="metadata" className="space-y-6">
+              {files.length === 0 ? (
+                <div className="text-center py-12 text-gray-500">
+                  No images uploaded yet
+                </div>
+              ) : (
+                <div className="space-y-6">
+                  {files.map((file) => (
+                    <MetadataTab key={file.id} file={file} />
+                  ))}
+                </div>
+              )}
             </TabsContent>
 
             {/* Results Tab */}
@@ -687,69 +812,89 @@ return (
                 </Button>
               </div>
 
-              {processing ? (
-                <div className="flex flex-col items-center justify-center py-12">
-                  <Loader2 className="h-12 w-12 text-blue-500 animate-spin" />
-                  <Progress value={processingProgress} className="w-64 mt-4" />
-                  <p className="mt-4 text-sm text-gray-500">
-                    Processing Images... {Math.round(processingProgress)}%
-                  </p>
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                  {files.filter(f => f.processedUrl).map((file) => (
-                    <Card key={file.id}>
-                      <CardContent className="p-4">
-                        <ImagePreview file={file} />
-                        <div className="space-y-2 mt-4">
-                          <p className="font-medium truncate">{file.file.name}</p>
-                          
-                          <div className="flex items-center space-x-2 text-sm text-gray-500">
-                            <span>{formatFileSize(file.file.size)}</span>
-                            {file.metadata && (
-                              <>
-                                <span>•</span>
-                                <span>{file.metadata.width} × {file.metadata.height}px</span>
-                              </>
-                            )}
+              <div className="grid grid-cols-1 gap-6">
+                {files.filter(f => f.processedUrl).map((file) => (
+                  <Card key={file.id}>
+                    <CardContent className="p-4">
+                      <div className="relative aspect-video">
+                        {showComparison ? (
+                          <div className="relative w-full h-full flex">
+                            <div className="w-1/2 relative border-r border-white/20">
+                              <Image
+                                src={file.preview}
+                                alt="Original"
+                                className="object-cover w-full h-full"
+                              />
+                              <div className="absolute bottom-2 left-2 text-xs bg-black/70 text-white px-2 py-1 rounded">
+                                Original
+                              </div>
+                            </div>
+                            <div className="w-1/2 relative">
+                              <Image
+                                src={file.processedUrl}
+                                alt="Processed"
+                                className="object-cover w-full h-full"
+                              />
+                              <div className="absolute bottom-2 right-2 text-xs bg-black/70 text-white px-2 py-1 rounded">
+                                Processed
+                              </div>
+                            </div>
                           </div>
+                        ) : (
+                          <Image
+                            src={file.processedUrl}
+                            alt={file.file.name}
+                            className="object-cover w-full h-full rounded-lg"
+                          />
+                        )}
+                      </div>
 
-                          <div className="flex space-x-2">
-                            <Button 
-                              variant="outline" 
-                              size="sm"
-                              className="flex-1"
-                              onClick={() => {
-                                const link = document.createElement('a');
-                                link.href = file.processedUrl!;
-                                link.download = `processed-${file.file.name}`;
-                                document.body.appendChild(link);
-                                link.click();
-                                document.body.removeChild(link);
-                              }}
-                            >
-                              <Download className="h-4 w-4 mr-2" />
-                              Download
-                            </Button>
-                            <Button 
-                              variant="outline" 
-                              size="sm"
-                              className="flex-1"
-                              onClick={() => {
-                                navigator.clipboard.writeText(file.processedUrl!);
-                                toast.success('URL copied to clipboard');
-                              }}
-                            >
-                              <Copy className="h-4 w-4 mr-2" />
-                              Copy URL
-                            </Button>
+                      <div className="space-y-4 mt-4">
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <p className="font-medium">{file.file.name}</p>
+                            <p className="text-sm text-gray-500">
+                              {formatFileSize(file.file.size)} • 
+                              {file.metadata && ` ${file.metadata.width} × ${file.metadata.height}px`}
+                            </p>
                           </div>
                         </div>
-                      </CardContent>
-                    </Card>
-                  ))}
-                </div>
-              )}
+
+                        <div className="flex space-x-2">
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            className="flex-1"
+                            onClick={() => {
+                              const link = document.createElement('a');
+                              link.href = file.processedUrl!;
+                              link.download = `processed-${file.file.name}`;
+                              document.body.appendChild(link);
+                              link.click();
+                              document.body.removeChild(link);
+                            }}
+                          >
+                            <Download className="h-4 w-4 mr-2" />
+                            Download
+                          </Button>
+                          <Button 
+                            variant="outline" 
+                            size="sm"
+                            className="flex-1"
+                            onClick={() => {
+                              navigator.clipboard.writeText(file.processedUrl!);
+                              toast.success('URL copied to clipboard');
+                            }}
+                          >
+                            <Copy className="h-4 w-4 mr-2" />
+                            Copy URL
+                          </Button>
+                        </div>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
             </TabsContent>
           </Tabs>
         </CardContent>
@@ -839,7 +984,7 @@ return (
       />
     </div>
   );
-}
+};
 
 // Error Boundary Component
 class ErrorBoundary extends React.Component<
