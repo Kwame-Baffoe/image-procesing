@@ -1,11 +1,12 @@
-'use client'
+// app/page.tsx
+"use client";
+
 import React, { useState, useEffect } from "react";
 import { useDropzone } from "react-dropzone";
+import Image from "next/image";
+import { motion, AnimatePresence } from "framer-motion";
 import axios from 'axios';
 import { toast } from "sonner";
-import { motion, AnimatePresence } from "framer-motion";
-import Image from "next/image";
-
 import { 
   Upload, 
   AlertCircle,
@@ -78,7 +79,7 @@ interface UploadableFile {
   status: 'waiting' | 'uploading' | 'success' | 'error' | 'processing';
   error?: string;
   metadata?: ImageMetadata;
-  processedUrl?: string;
+  processedUrl: string | null;
   processedMetadata?: ImageMetadata;
 }
 
@@ -96,6 +97,13 @@ interface ProcessingOptions {
     level: number;
   };
 }
+//  Interface for the UploadableFile
+interface FilePreviewProps {
+  file: UploadableFile;
+  onDelete: (id: string) => void;
+}
+
+
 
 // Default Options and Utilities
 const defaultProcessingOptions: ProcessingOptions = {
@@ -151,156 +159,147 @@ const MetadataSection: React.FC<{
   </div>
 );
 
-const MetadataTab: React.FC<{ file: UploadableFile }> = ({ file }) => {
-  if (!file.metadata) {
-    return (
-      <div className="text-center py-8 text-gray-500">
-        No metadata available
-      </div>
-    );
-  }
-
-  const totalPixels = file.metadata.width * file.metadata.height;
-  const aspectRatio = calculateAspectRatio(file.metadata.width, file.metadata.height);
-
-  return (
-    <div className="space-y-6">
-      <Card>
-        <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <FileIcon className="h-5 w-5" />
-            Image Details
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <div className="grid gap-6">
-            <MetadataSection
-              title="Basic Information"
-              icon={<ImageIcon className="h-4 w-4" />}
-              items={[
-                {
-                  label: "Dimensions",
-                  value: `${file.metadata.width} × ${file.metadata.height} pixels`
-                },
-                {
-                  label: "Aspect Ratio",
-                  value: aspectRatio
-                },
-                {
-                  label: "File Size",
-                  value: formatFileSize(file.file.size)
-                },
-                {
-                  label: "Format",
-                  value: file.metadata.format.toUpperCase()
-                }
-              ]}
-            />
-
-            <MetadataSection
-              title="Pixel Information"
-              icon={<Grid className="h-4 w-4" />}
-              items={[
-                {
-                  label: "Total Pixels",
-                  value: totalPixels.toLocaleString()
-                },
-                {
-                  label: "Megapixels",
-                  value: `${(totalPixels / 1000000).toFixed(2)} MP`
-                },
-                {
-                  label: "Pixel Density",
-                  value: file.metadata.density ? 
-                    `${file.metadata.density.x} × ${file.metadata.density.y} ${file.metadata.density.unit || 'ppi'}` :
-                    'Not available'
-                }
-              ]}
-            />
-
-            <MetadataSection
-              title="Color Information"
-              icon={<Palette className="h-4 w-4" />}
-              items={[
-                {
-                  label: "Color Space",
-                  value: file.metadata.colorSpace
-                },
-                {
-                  label: "Color Channels",
-                  value: file.metadata.channels?.length 
-                    ? file.metadata.channels.join(', ')
-                    : 'Not available'
-                },
-                {
-                  label: "Alpha Channel",
-                  value: file.metadata.hasAlpha ? 'Yes' : 'No'
-                }
-              ]}
-            />
-
-            {file.processedMetadata && (
-              <>
-                <Separator className="my-4" />
-                <div className="space-y-4">
-                  <h3 className="font-medium flex items-center gap-2">
-                    <WandIcon className="h-4 w-4" />
-                    Processing Results
-                  </h3>
-                  
-                  <MetadataSection
-                    title="Size Comparison"
-                    icon={<ScaleIcon className="h-4 w-4" />}
-                    items={[
-                      {
-                        label: "Original Size",
-                        value: formatFileSize(file.file.size)
-                      },
-                      {
-                        label: "Processed Size",
-                        value: formatFileSize(file.processedMetadata.size)
-                      },
-                      {
-                        label: "Size Reduction",
-                        value: `${((1 - file.processedMetadata.size / file.file.size) * 100).toFixed(1)}%`
-                      }
-                    ]}
-                  />
-                </div>
-              </>
-            )}
+// FilePreview Component
+const FilePreview: React.FC<{ file: UploadableFile }> = ({ file }) => (
+  <motion.div
+    initial={{ opacity: 0, y: 20 }}
+    animate={{ opacity: 1, y: 0 }}
+    exit={{ opacity: 0, x: -100 }}
+    className="border rounded-lg p-4"
+  >
+    <div className="flex items-center space-x-4">
+      <div className="relative h-16 w-16">
+        {file.preview ? (
+          <Image
+            src={file.preview}
+            alt={file.file.name}
+            className="object-cover rounded"
+            width={64}
+            height={64}
+            unoptimized
+          />
+        ) : (
+          <div className="w-full h-full bg-gray-100 rounded flex items-center justify-center">
+            <ImageIcon className="h-8 w-8 text-gray-400" />
           </div>
-        </CardContent>
-      </Card>
+        )}
+      </div>
+      <div className="flex-1">
+        <p className="font-medium truncate">{file.file.name}</p>
+        <p className="text-sm text-gray-500">
+          {formatFileSize(file.file.size)}
+        </p>
+        
+        {file.status === 'uploading' && (
+          <div className="mt-2">
+            <Progress value={file.progress} className="h-1" />
+            <p className="text-xs text-gray-500 mt-1">
+              Uploading... {file.progress}%
+            </p>
+          </div>
+        )}
+
+        {file.status === 'success' && (
+          <p className="text-sm text-green-500 mt-2 flex items-center">
+            <CheckCircle2 className="h-4 w-4 mr-1" />
+            Upload complete
+          </p>
+        )}
+
+        {file.status === 'error' && (
+          <p className="text-sm text-red-500 mt-2 flex items-center">
+            <AlertCircle className="h-4 w-4 mr-1" />
+            {file.error}
+          </p>
+        )}
+      </div>
+      <Button
+        variant="ghost"
+        size="sm"
+        onClick={() => {
+          setFiles(current => 
+            current.filter(f => f.id !== file.id)
+          );
+          URL.revokeObjectURL(file.preview);
+        }}
+      >
+        <Trash2 className="h-4 w-4" />
+      </Button>
     </div>
-  );
-};
+  </motion.div>
+);
+
+// ImagePreview Component
+const ImagePreview: React.FC<{ file: UploadableFile }> = ({ file }) => (
+  <div className="relative aspect-video">
+    {showComparison ? (
+      <div className="relative w-full h-full flex">
+        <div className="w-1/2 relative border-r border-white/20">
+          {file.preview && (
+            <Image
+              src={file.preview}
+              alt="Original"
+              fill
+              className="object-cover"
+              unoptimized
+            />
+          )}
+          <div className="absolute bottom-2 left-2 text-xs bg-black/70 text-white px-2 py-1 rounded">
+            Original
+          </div>
+        </div>
+        <div className="w-1/2 relative">
+          {file.processedUrl && (
+            <Image
+              src={file.processedUrl}
+              alt="Processed"
+              fill
+              className="object-cover"
+              unoptimized
+            />
+          )}
+          <div className="absolute bottom-2 right-2 text-xs bg-black/70 text-white px-2 py-1 rounded">
+            Processed
+          </div>
+        </div>
+      </div>
+    ) : (
+      file.processedUrl && (
+        <Image
+          src={file.processedUrl}
+          alt={file.file.name}
+          fill
+          className="object-cover rounded-lg"
+          unoptimized
+        />
+      )
+    )}
+  </div>
+);
 
 // Processing Dialog Component
 const ProcessingDialog: React.FC<{ 
   open: boolean; 
   progress: number;
-}> = ({ open, progress }) => {
-  return (
-    <AlertDialog open={open}>
-      <AlertDialogContent>
-        <AlertDialogHeader>
-          <AlertDialogTitle>Processing Images</AlertDialogTitle>
-          <AlertDialogDescription>
-            Please wait while your images are being processed...
-          </AlertDialogDescription>
-        </AlertDialogHeader>
-        <div className="flex flex-col items-center py-6 space-y-4">
-          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
-          <Progress value={progress} className="w-full" />
-          <p className="text-sm text-gray-500">
-            Progress: {Math.round(progress)}%
-          </p>
-        </div>
-      </AlertDialogContent>
-    </AlertDialog>
-  );
-};
+}> = ({ open, progress }) => (
+  <AlertDialog open={open}>
+    <AlertDialogContent>
+      <AlertDialogHeader>
+        <AlertDialogTitle>Processing Images</AlertDialogTitle>
+        <AlertDialogDescription>
+          Please wait while your images are being processed...
+        </AlertDialogDescription>
+      </AlertDialogHeader>
+      <div className="flex flex-col items-center py-6 space-y-4">
+        <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+        <Progress value={progress} className="w-full" />
+        <p className="text-sm text-gray-500">
+          Progress: {Math.round(progress)}%
+        </p>
+      </div>
+    </AlertDialogContent>
+  </AlertDialog>
+);
 
 // Main ImageProcessor Component
 const ImageProcessor: React.FC = () => {
@@ -462,7 +461,8 @@ const ImageProcessor: React.FC = () => {
         file,
         preview: URL.createObjectURL(file),
         progress: 0,
-        status: 'waiting' as const
+        status: 'waiting' as const,
+        processedUrl: null
       }));
 
       setFiles(newFiles);
@@ -528,7 +528,7 @@ const ImageProcessor: React.FC = () => {
               </TabsTrigger>
               <TabsTrigger 
                 value="results" 
-                disabled={!files.some(f => f.processedUrl)}
+                disabled={!files.some(f => f.processedUrl !== null)}
               >
                 <Download className="h-4 w-4 mr-2" />
                 Results
@@ -582,64 +582,7 @@ const ImageProcessor: React.FC = () => {
               <div className="mt-6 space-y-4">
                 <AnimatePresence>
                   {files.map((file) => (
-                    <motion.div
-                      key={file.id}
-                      initial={{ opacity: 0, y: 20 }}
-                      animate={{ opacity: 1, y: 0 }}
-                      exit={{ opacity: 0, x: -100 }}
-                      className="border rounded-lg p-4"
-                    >
-                      <div className="flex items-center space-x-4">
-                        <div className="relative h-16 w-16">
-                          <Image
-                            src={file.preview}
-                            alt={file.file.name}
-                            className="object-cover rounded w-full h-full"
-                          />
-                        </div>
-                        <div className="flex-1">
-                          <p className="font-medium truncate">{file.file.name}</p>
-                          <p className="text-sm text-gray-500">
-                            {formatFileSize(file.file.size)}
-                          </p>
-                          
-                          {file.status === 'uploading' && (
-                            <div className="mt-2">
-                              <Progress value={file.progress} className="h-1" />
-                              <p className="text-xs text-gray-500 mt-1">
-                                Uploading... {file.progress}%
-                              </p>
-                            </div>
-                          )}
-
-                          {file.status === 'success' && (
-                            <p className="text-sm text-green-500 mt-2 flex items-center">
-                              <CheckCircle2 className="h-4 w-4 mr-1" />
-                              Upload complete
-                            </p>
-                          )}
-
-                          {file.status === 'error' && (
-                            <p className="text-sm text-red-500 mt-2 flex items-center">
-                              <AlertCircle className="h-4 w-4 mr-1" />
-                              {file.error}
-                            </p>
-                          )}
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => {
-                            setFiles(current => 
-                              current.filter(f => f.id !== file.id)
-                            );
-                            URL.revokeObjectURL(file.preview);
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      </div>
-                    </motion.div>
+                    <FilePreview key={file.id} file={file} />
                   ))}
                 </AnimatePresence>
               </div>
@@ -813,42 +756,10 @@ const ImageProcessor: React.FC = () => {
               </div>
 
               <div className="grid grid-cols-1 gap-6">
-                {files.filter(f => f.processedUrl).map((file) => (
+                {files.filter(f => f.processedUrl !== null).map((file) => (
                   <Card key={file.id}>
                     <CardContent className="p-4">
-                      <div className="relative aspect-video">
-                        {showComparison ? (
-                          <div className="relative w-full h-full flex">
-                            <div className="w-1/2 relative border-r border-white/20">
-                              <Image
-                                src={file.preview}
-                                alt="Original"
-                                className="object-cover w-full h-full"
-                              />
-                              <div className="absolute bottom-2 left-2 text-xs bg-black/70 text-white px-2 py-1 rounded">
-                                Original
-                              </div>
-                            </div>
-                            <div className="w-1/2 relative">
-                              <Image
-                                src={file.processedUrl}
-                                alt="Processed"
-                                className="object-cover w-full h-full"
-                              />
-                              <div className="absolute bottom-2 right-2 text-xs bg-black/70 text-white px-2 py-1 rounded">
-                                Processed
-                              </div>
-                            </div>
-                          </div>
-                        ) : (
-                          <Image
-                            src={file.processedUrl}
-                            alt={file.file.name}
-                            className="object-cover w-full h-full rounded-lg"
-                          />
-                        )}
-                      </div>
-
+                      <ImagePreview file={file} />
                       <div className="space-y-4 mt-4">
                         <div className="flex justify-between items-center">
                           <div>
@@ -967,23 +878,23 @@ const ImageProcessor: React.FC = () => {
             <AlertDialogAction 
               onClick={() => {
                 setShowProcessDialog(false);
-                processImages();
-              }}
-              className="bg-blue-600 hover:bg-blue-700"
-            >
-              Confirm & Process
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
+                  processImages();
+                }}
+                className="bg-blue-600 hover:bg-blue-700"
+              >
+                Confirm & Process
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
-      {/* Processing Dialog */}
-      <ProcessingDialog 
-        open={processing} 
-        progress={processingProgress}
-      />
-    </div>
-  );
+        {/* Processing Dialog */}
+        <ProcessingDialog 
+          open={processing} 
+          progress={processingProgress}
+        />
+      </div>
+    );
 };
 
 // Error Boundary Component
@@ -1030,6 +941,132 @@ class ErrorBoundary extends React.Component<
     return this.props.children;
   }
 }
+
+// MetadataTab Component
+const MetadataTab: React.FC<{ file: UploadableFile }> = ({ file }) => {
+  if (!file.metadata) {
+    return (
+      <div className="text-center py-8 text-gray-500">
+        No metadata available
+      </div>
+    );
+  }
+
+  const totalPixels = file.metadata.width * file.metadata.height;
+  const aspectRatio = calculateAspectRatio(file.metadata.width, file.metadata.height);
+
+  return (
+    <div className="space-y-6">
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <FileIcon className="h-5 w-5" />
+            Image Details
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid gap-6">
+            <MetadataSection
+              title="Basic Information"
+              icon={<ImageIcon className="h-4 w-4" />}
+              items={[
+                {
+                  label: "Dimensions",
+                  value: `${file.metadata.width} × ${file.metadata.height} pixels`
+                },
+                {
+                  label: "Aspect Ratio",
+                  value: aspectRatio
+                },
+                {
+                  label: "File Size",
+                  value: formatFileSize(file.file.size)
+                },
+                {
+                  label: "Format",
+                  value: file.metadata.format.toUpperCase()
+                }
+              ]}
+            />
+
+            <MetadataSection
+              title="Pixel Information"
+              icon={<Grid className="h-4 w-4" />}
+              items={[
+                {
+                  label: "Total Pixels",
+                  value: totalPixels.toLocaleString()
+                },
+                {
+                  label: "Megapixels",
+                  value: `${(totalPixels / 1000000).toFixed(2)} MP`
+                },
+                {
+                  label: "Pixel Density",
+                  value: file.metadata.density ? 
+                    `${file.metadata.density.x} × ${file.metadata.density.y} ${file.metadata.density.unit || 'ppi'}` :
+                    'Not available'
+                }
+              ]}
+            />
+
+            <MetadataSection
+              title="Color Information"
+              icon={<Palette className="h-4 w-4" />}
+              items={[
+                {
+                  label: "Color Space",
+                  value: file.metadata.colorSpace
+                },
+                {
+                  label: "Color Channels",
+                  value: file.metadata.channels?.length 
+                    ? file.metadata.channels.join(', ')
+                    : 'Not available'
+                },
+                {
+                  label: "Alpha Channel",
+                  value: file.metadata.hasAlpha ? 'Yes' : 'No'
+                }
+              ]}
+            />
+
+            {file.processedMetadata && (
+              <>
+                <Separator className="my-4" />
+                <div className="space-y-4">
+                  <h3 className="font-medium flex items-center gap-2">
+                    <WandIcon className="h-4 w-4" />
+                    Processing Results
+                  </h3>
+                  
+                  <MetadataSection
+                    title="Size Comparison"
+                    icon={<ScaleIcon className="h-4 w-4" />}
+                    items={[
+                      {
+                        label: "Original Size",
+                        value: formatFileSize(file.file.size)
+                      },
+                      {
+                        label: "Processed Size",
+                        value: formatFileSize(file.processedMetadata.size)
+                      },
+                      {
+                        label: "Size Reduction",
+                        value: `${((1 - file.processedMetadata.size / file.file.size) * 100).toFixed(1)}%`
+                      }
+                    ]}
+                  />
+                </div>
+              </>
+            )}
+          </div>
+        </CardContent>
+      </Card>
+    </div>
+  );
+};
 
 // Export wrapped component
 export default function Page() {
