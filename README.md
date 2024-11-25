@@ -32,12 +32,12 @@ A modern, feature-rich image processing application built with Next.js 14, TypeS
 
 ## 🛠️ Tech Stack
 
-- Next.js 14
+- Next.js 15
 - TypeScript
 - Tailwind CSS
 - Shadcn UI Components
 - Framer Motion
-- Sharp (for image processing)
+- Sharp and ImageMagick API wand(for image processing)
 - Axios
 - React Dropzone
 
